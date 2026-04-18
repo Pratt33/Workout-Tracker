@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Workout Tracker",
+    "slug": "workout-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#151230"
+      },
+      "package": "com.yourname.workouttracker",
+      "softwareKeyboardLayoutMode": "pan"
+    },
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "fcde71d2-27e8-45da-844a-938f3dcaa21b"
+      }
+    }
+  }
+}
