@@ -1,4 +1,4 @@
-# Workout Tracker
+# Workout Tracker v2.0
 
 A practical workout logging app focused on consistency, progression tracking, and LLM-ready insights.
 
@@ -18,6 +18,7 @@ Goals:
 - Editable exercise names with safe data migration.
 - Smart prefill from previous sessions.
 - LLM-ready export with annotations and derived metrics.
+- Rest-day declaration (including missed-day marking).
 
 ## Main Challenges Faced
 - Keeping the data model simple but flexible.
@@ -50,7 +51,7 @@ Goals:
 
 ## App Download Link
 Android preview build:
-- https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/f74c6f7e-86ee-4957-9026-027e2c1f9fd4
+- https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/8b85d301-c5af-430e-abaf-0cd80f927fb0
 
 ## Future Improvements
 - Personal best tracking and milestones.

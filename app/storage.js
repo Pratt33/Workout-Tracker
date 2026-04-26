@@ -3,10 +3,47 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const KEY = 'workout_sessions_v1';
 const PLAN_KEY = 'workout_plan_v1';
 
+const LEGACY_EXERCISE_RENAMES = [
+  { from: 'Machine Walking', to: 'Treadmill' },
+  { from: 'Incline Power Walk', to: 'Treadmill' },
+  { from: 'Cycling Machine', to: 'Cycling' },
+  { from: 'Upright Bike', to: 'Cycling' },
+  { from: 'Steady-State Cycling', to: 'Cycling' },
+  { from: 'Plank Hold', to: 'Plank' },
+];
+
+function migrateLegacyExerciseNames(sessions) {
+  const next = { ...(sessions || {}) };
+  let changed = false;
+
+  Object.keys(next).forEach(k => {
+    const day = next[k];
+    if (!day || typeof day !== 'object' || Array.isArray(day)) return;
+
+    LEGACY_EXERCISE_RENAMES.forEach(({ from, to }) => {
+      if (!from || !to || from === to) return;
+      if (!Object.prototype.hasOwnProperty.call(day, from)) return;
+
+      const oldSets = Array.isArray(day[from]) ? day[from] : [];
+      const existing = Array.isArray(day[to]) ? day[to] : [];
+      day[to] = existing.length > 0 ? [...existing, ...oldSets] : oldSets;
+      delete day[from];
+      changed = true;
+    });
+  });
+
+  return { sessions: next, changed };
+}
+
 export async function loadSessions() {
   try {
     const raw = await AsyncStorage.getItem(KEY);
-    return raw ? JSON.parse(raw) : {};
+    const parsed = raw ? JSON.parse(raw) : {};
+    const { sessions, changed } = migrateLegacyExerciseNames(parsed);
+    if (changed) {
+      await AsyncStorage.setItem(KEY, JSON.stringify(sessions));
+    }
+    return sessions;
   } catch { return {}; }
 }
 
@@ -75,6 +112,20 @@ export function getMuscleVolume(sessionData, muscleName, dayPlan) {
     });
   });
   return Math.round(vol);
+}
+
+export function getCardioMinutes(sessionData, dayPlan) {
+  if (!sessionData || !dayPlan) return 0;
+  let mins = 0;
+  dayPlan.groups.forEach(g => {
+    if (g.name !== 'Cardio') return;
+    g.exercises.forEach(ex => {
+      (sessionData[ex] || []).forEach(s => {
+        mins += (parseFloat(s.m) || 0);
+      });
+    });
+  });
+  return Math.round(mins * 10) / 10;
 }
 
 export function getFilteredKeys(sessions, filter) {

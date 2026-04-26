@@ -8,7 +8,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
 import AppLogo from '../app/AppLogo';
 import { PLAN, MUSCLE_COLORS, MUSCLES } from '../app/data';
-import { loadSessions, formatDate, getMuscleVolume, getFilteredKeys, loadWorkoutPlan } from '../app/storage';
+import { loadSessions, formatDate, getMuscleVolume, getFilteredKeys, loadWorkoutPlan, getCardioMinutes } from '../app/storage';
 import { useTheme } from '../app/theme';
 
 const W = Dimensions.get('window').width - 48;
@@ -76,6 +76,24 @@ export default function ProgressScreen() {
 
   const overviewData = getAllMusclesData();
   const drillData = getDrillData();
+
+  const getCardioData = () => {
+    const pts = [];
+    filteredKeys.forEach(k => {
+      const dow = sessions[k]?._dow;
+      const day = planMap[dow];
+      if (!day) return;
+      const mins = getCardioMinutes(sessions[k], day);
+      if (mins > 0) pts.push({ key: k, mins });
+    });
+    if (pts.length < 2) return null;
+    return {
+      labels: pts.map(p => formatDate(p.key)),
+      datasets: [{ data: pts.map(p => p.mins), color: () => '#F35D8A', strokeWidth: 2.5 }]
+    };
+  };
+
+  const cardioData = getCardioData();
 
   const makeChartConfig = (lineColor) => ({
     backgroundGradientFrom: t.surface,
@@ -186,6 +204,31 @@ export default function ProgressScreen() {
               <Text style={[s.emptyText, { color: t.textHint }]}>
                 Log at least 2 {selectedMuscle} sessions to see chart
               </Text>
+            </View>
+          )}
+        </View>
+
+        <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
+          <Text style={[s.cardTitle, { color: t.text }]}>Cardio minutes</Text>
+          <Text style={[s.cardSub, { color: t.textSub }]}>Total cardio minutes per session</Text>
+          {cardioData ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <LineChart
+                data={cardioData}
+                width={Math.max(W, cardioData.labels.length * 64)}
+                height={170}
+                chartConfig={makeChartConfig('#F35D8A')}
+                bezier
+                style={{ borderRadius: 8 }}
+                withDots={true}
+                withInnerLines={true}
+                withOuterLines={false}
+                withShadow={false}
+              />
+            </ScrollView>
+          ) : (
+            <View style={s.empty}>
+              <Text style={[s.emptyText, { color: t.textHint }]}>Log at least 2 cardio sessions to see chart</Text>
             </View>
           )}
         </View>

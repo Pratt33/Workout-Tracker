@@ -9,7 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../app/theme';
 import AppLogo from '../app/AppLogo';
-import { PLAN } from '../app/data';
+import { PLAN, isCardioExercise } from '../app/data';
 import {
   loadSessions,
   saveSessions,
@@ -27,6 +27,10 @@ const EMPTY_SETS = () => [
   { label: 'Set 3',  w: '', r: '',   dead: true  },
   { label: 'Drop 1', w: '', r: '',   dead: true  },
   { label: 'Drop 2', w: '', r: '',   dead: true  },
+];
+
+const EMPTY_CARDIO_SETS = () => [
+  { label: 'Minute Slot 1', m: '' },
 ];
 
 function AnimatedExRow({ ex, isDone, onPress, onEdit, index, t }) {
@@ -103,6 +107,88 @@ export default function TodayScreen() {
   const day = planMap[dow];
   const tk = todayKey();
 
+  const getDateKeyOffset = (offsetDays) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const getDowFromKey = (dateKey) => {
+    return new Date(dateKey + 'T00:00:00').getDay();
+  };
+
+  const getExerciseKeys = (session) => {
+    if (!session || typeof session !== 'object') return [];
+    return Object.keys(session).filter(k => !k.startsWith('_') && Array.isArray(session[k]) && session[k].length > 0);
+  };
+
+  const hasLoggedWorkout = (session) => getExerciseKeys(session).length > 0;
+
+  const hasOnlyMeta = (session) => {
+    if (!session || typeof session !== 'object') return false;
+    return Object.keys(session).every(k => k.startsWith('_'));
+  };
+
+  const applyRestDay = async (dateKey, overwriteWorkout = false) => {
+    const existing = sessions[dateKey];
+    const hadWorkout = hasLoggedWorkout(existing);
+
+    if (hadWorkout && !overwriteWorkout) {
+      Alert.alert(
+        'Replace workout with rest day?',
+        `A workout is already logged for ${formatDate(dateKey)}. Marking rest will remove that workout data.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Replace with rest',
+            style: 'destructive',
+            onPress: () => {
+              applyRestDay(dateKey, true);
+            }
+          }
+        ]
+      );
+      return;
+    }
+
+    const next = { ...sessions };
+    next[dateKey] = {
+      _dow: getDowFromKey(dateKey),
+      _rest: true,
+      _restDeclaredOn: tk,
+    };
+    setSessions(next);
+    await saveSessions(next);
+    Alert.alert('Rest day saved', `${formatDate(dateKey)} is now marked as rest day.`);
+  };
+
+  const removeRestDay = async (dateKey) => {
+    const existing = sessions[dateKey];
+    if (!existing || !existing._rest) return;
+
+    const next = { ...sessions };
+    const cleaned = { ...existing };
+    delete cleaned._rest;
+    delete cleaned._restDeclaredOn;
+
+    if (hasOnlyMeta(cleaned)) {
+      delete next[dateKey];
+    } else {
+      next[dateKey] = cleaned;
+    }
+
+    setSessions(next);
+    await saveSessions(next);
+  };
+
+  const restTargets = Array.from({ length: 7 }, (_, i) => getDateKeyOffset(-i));
+
+  const labelForDateKey = (dateKey, index) => {
+    if (index === 0) return 'Today';
+    if (index === 1) return 'Yesterday';
+    return formatDate(dateKey);
+  };
+
   useFocusEffect(useCallback(() => {
     Promise.all([loadSessions(), loadWorkoutPlan()]).then(([s, savedPlan]) => {
       if (!s[tk]) s[tk] = { _dow: dow };
@@ -116,17 +202,28 @@ export default function TodayScreen() {
   }, []));
 
   const openLogger = (ex) => {
+    const isCardio = isCardioExercise(ex);
     const existing = sessions[tk]?.[ex];
     if (existing?.length) {
-      setActiveSets(JSON.parse(JSON.stringify(existing)));
+      if (isCardio) {
+        const total = existing.reduce((a, s) => a + (parseFloat(s.m) || 0), 0);
+        setActiveSets([{ label: 'Minute Slot 1', m: total > 0 ? String(total) : '' }]);
+      } else {
+        setActiveSets(JSON.parse(JSON.stringify(existing)));
+      }
       setPrefillDate(null);
     } else {
       const last = getLatestExerciseSets(sessions, ex, tk);
       if (last.sets?.length) {
-        setActiveSets(last.sets);
+        if (isCardio) {
+          const total = last.sets.reduce((a, s) => a + (parseFloat(s.m) || 0), 0);
+          setActiveSets([{ label: 'Minute Slot 1', m: total > 0 ? String(total) : '' }]);
+        } else {
+          setActiveSets(last.sets);
+        }
         setPrefillDate(last.dateKey);
       } else {
-        setActiveSets(EMPTY_SETS());
+        setActiveSets(isCardio ? EMPTY_CARDIO_SETS() : EMPTY_SETS());
         setPrefillDate(null);
       }
     }
@@ -209,7 +306,46 @@ export default function TodayScreen() {
     cancelEditingExercise();
   };
 
-  const totalVol = activeSets.reduce((a, s) => a + (parseFloat(s.w) || 0) * (parseInt(s.r) || 0), 0);
+  const activeIsCardio = activeEx ? isCardioExercise(activeEx) : false;
+  const totalVol = activeIsCardio
+    ? activeSets.reduce((a, s) => a + (parseFloat(s.m) || 0), 0)
+    : activeSets.reduce((a, s) => a + (parseFloat(s.w) || 0) * (parseInt(s.r) || 0), 0);
+
+  const renderRestTools = () => (
+    <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
+      <View style={[s.groupHdr, { borderBottomColor: t.border }]}> 
+        <View style={[s.dot, { backgroundColor: t.deadColor }]} />
+        <Text style={[s.groupName, { color: t.text }]}>Rest day tools</Text>
+      </View>
+      <Text style={[s.restToolsSub, { color: t.textSub }]}>If you miss a day, you can mark it as rest later.</Text>
+      {restTargets.map((dateKey, idx) => {
+        const isRest = !!sessions[dateKey]?._rest;
+        return (
+          <View key={dateKey} style={[s.restRow, { borderTopColor: t.border }]}> 
+            <View style={{ flex: 1 }}>
+              <Text style={[s.restDateLabel, { color: t.text }]}>{labelForDateKey(dateKey, idx)}</Text>
+              <Text style={[s.restDateSub, { color: t.textSub }]}>{formatDate(dateKey)}</Text>
+            </View>
+            {isRest ? (
+              <TouchableOpacity
+                style={[s.restActionBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
+                onPress={() => removeRestDay(dateKey)}
+              >
+                <Text style={[s.restActionText, { color: t.textSub }]}>Undo</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[s.restActionBtn, { borderColor: t.deadColor, backgroundColor: t.deadColor + '14' }]}
+                onPress={() => applyRestDay(dateKey)}
+              >
+                <Text style={[s.restActionText, { color: t.deadColor }]}>Mark rest</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
 
   if (editingEx && day) {
     return (
@@ -282,49 +418,84 @@ export default function TodayScreen() {
           <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
             <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}>
               <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}>
-                <Text style={[s.setColHdr, { flex: 1.4, color: t.textHint }]}>Set</Text>
-                <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Weight kg</Text>
-                <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Reps</Text>
-                <Text style={[s.setColHdr, { flex: 0.8, textAlign: 'right', color: t.textHint }]}>Vol</Text>
+                <Text style={[s.setColHdr, { flex: activeIsCardio ? 2 : 1.4, color: t.textHint }]}>Set</Text>
+                {activeIsCardio ? (
+                  <>
+                    <Text style={[s.setColHdr, { flex: 1.2, textAlign: 'center', color: t.textHint }]}>Total Minutes</Text>
+                    <Text style={[s.setColHdr, { flex: 0.8, textAlign: 'right', color: t.textHint }]}>Total</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Weight kg</Text>
+                    <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Reps</Text>
+                    <Text style={[s.setColHdr, { flex: 0.8, textAlign: 'right', color: t.textHint }]}>Vol</Text>
+                  </>
+                )}
               </View>
               {activeSets.map((set, i) => {
-                const vol = (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
+                const vol = activeIsCardio
+                  ? (parseFloat(set.m) || 0)
+                  : (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
                 return (
                   <View key={i} style={[s.setRow, { borderTopColor: t.border }]}>
-                    <Text style={[s.setLabel, { color: set.dead ? t.deadColor : t.textSub }, { flex: 1.4 }]}>{set.label}</Text>
-                    <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                      <TextInput
-                        style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                        value={set.w}
-                        onChangeText={v => updateSet(i, 'w', v)}
-                        placeholder="kg"
-                        placeholderTextColor={t.textHint}
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
-                    <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                      <TextInput
-                        style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                        value={set.r}
-                        onChangeText={v => updateSet(i, 'r', v)}
-                        placeholder="reps"
-                        placeholderTextColor={t.textHint}
-                        keyboardType="number-pad"
-                      />
-                    </View>
-                    <Text style={[s.setVol, { flex: 0.8, color: vol > 0 ? t.accent : t.textHint }]}>
-                      {vol > 0 ? Math.round(vol) + '' : '—'}
-                    </Text>
+                    <Text style={[s.setLabel, { color: set.dead ? t.deadColor : t.textSub }, { flex: activeIsCardio ? 2 : 1.4 }]}>{set.label}</Text>
+                    {activeIsCardio ? (
+                      <>
+                        <View style={{ flex: 1.2, paddingHorizontal: 4 }}>
+                          <TextInput
+                            style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
+                            value={set.m}
+                            onChangeText={v => updateSet(i, 'm', v)}
+                            placeholder="min"
+                            placeholderTextColor={t.textHint}
+                            keyboardType="decimal-pad"
+                          />
+                        </View>
+                        <Text style={[s.setVol, { flex: 0.8, color: vol > 0 ? t.accent : t.textHint }]}> 
+                          {vol > 0 ? Math.round(vol) + 'm' : '—'}
+                        </Text>
+                      </>
+                    ) : (
+                      <>
+                        <View style={{ flex: 1, paddingHorizontal: 4 }}>
+                          <TextInput
+                            style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
+                            value={set.w}
+                            onChangeText={v => updateSet(i, 'w', v)}
+                            placeholder="kg"
+                            placeholderTextColor={t.textHint}
+                            keyboardType="decimal-pad"
+                          />
+                        </View>
+                        <View style={{ flex: 1, paddingHorizontal: 4 }}>
+                          <TextInput
+                            style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
+                            value={set.r}
+                            onChangeText={v => updateSet(i, 'r', v)}
+                            placeholder="reps"
+                            placeholderTextColor={t.textHint}
+                            keyboardType="number-pad"
+                          />
+                        </View>
+                        <Text style={[s.setVol, { flex: 0.8, color: vol > 0 ? t.accent : t.textHint }]}> 
+                          {vol > 0 ? Math.round(vol) + '' : '—'}
+                        </Text>
+                      </>
+                    )}
                   </View>
                 );
               })}
               <View style={[s.totalRow, { borderTopColor: t.border }]}>
-                <Text style={[s.totalLabel, { color: t.textSub }]}>Total volume</Text>
-                <Text style={[s.totalVal, { color: t.text }]}>{Math.round(totalVol).toLocaleString()} kg</Text>
+                <Text style={[s.totalLabel, { color: t.textSub }]}>{activeIsCardio ? 'Total minutes' : 'Total volume'}</Text>
+                <Text style={[s.totalVal, { color: t.text }]}> 
+                  {activeIsCardio ? `${Math.round(totalVol).toLocaleString()} min` : `${Math.round(totalVol).toLocaleString()} kg`}
+                </Text>
               </View>
             </View>
             <View style={s.deadNote}>
-              <Text style={[s.deadNoteText, { color: t.textHint }]}>Set 3 → Drop 1 → Drop 2 are dead sets — no rest between them</Text>
+              {!activeIsCardio && (
+                <Text style={[s.deadNoteText, { color: t.textHint }]}>Set 3 → Drop 1 → Drop 2 are dead sets — no rest between them</Text>
+              )}
             </View>
             <Animated.View style={{ transform: [{ scale: saveScaleAnim }] }}>
               <TouchableOpacity
@@ -353,11 +524,14 @@ export default function TodayScreen() {
             <AppLogo theme={t} compact />
           </View>
         </View>
-        <View style={s.restScreen}>
-          <Text style={[s.restDash, { color: t.textHint }]}>—</Text>
-          <Text style={[s.restTitle, { color: t.text }]}>Rest day</Text>
-          <Text style={[s.restSub, { color: t.textSub }]}>Recovery is part of the process.</Text>
-        </View>
+        <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 16 }}>
+          <View style={s.restScreen}>
+            <Text style={[s.restDash, { color: t.textHint }]}>—</Text>
+            <Text style={[s.restTitle, { color: t.text }]}>Rest day</Text>
+            <Text style={[s.restSub, { color: t.textSub }]}>Recovery is part of the process.</Text>
+          </View>
+          {renderRestTools()}
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -381,6 +555,7 @@ export default function TodayScreen() {
         </View>
       </View>
       <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 16 }}>
+        {renderRestTools()}
         {day.groups.map((g, gi) => {
           const done = g.exercises.filter(ex => sessions[tk]?.[ex]?.length > 0).length;
           return (
@@ -501,6 +676,12 @@ const s = StyleSheet.create({
   restDash: { fontSize: 48, marginBottom: 16 },
   restTitle: { fontSize: 20, fontWeight: '600', marginBottom: 8 },
   restSub: { fontSize: 13, textAlign: 'center' },
+  restToolsSub: { fontSize: 12, lineHeight: 18, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 4 },
+  restRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: 0.5 },
+  restDateLabel: { fontSize: 13, fontWeight: '600' },
+  restDateSub: { fontSize: 11, marginTop: 2 },
+  restActionBtn: { borderWidth: 0.8, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  restActionText: { fontSize: 12, fontWeight: '600' },
   editWrap: { flex: 1, padding: 12 },
   editCard: { borderRadius: 14, borderWidth: 0.5, padding: 14 },
   editLabel: { fontSize: 12, marginBottom: 6 },
