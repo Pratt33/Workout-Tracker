@@ -10,6 +10,18 @@ const CARDIO_GROUP = {
   exercises: CARDIO_EXERCISES,
 };
 
+export const WEIGHT_EXERCISES = ['Body Weight'];
+
+export function isWeightExercise(exerciseName) {
+  return WEIGHT_EXERCISES.includes(exerciseName);
+}
+
+const WEIGHT_GROUP = {
+  name: 'Weight',
+  color: '#A78BFA',
+  exercises: WEIGHT_EXERCISES,
+};
+
 export const PLAN = {
   1: {
     label: 'Monday',
@@ -17,38 +29,43 @@ export const PLAN = {
       { name: 'Chest', color: '#7B72E8', exercises: ['Bench Press (Barbell)', 'Dumbbell Incline Press', 'Pec Deck / Weighted Dips'] },
       { name: 'Triceps', color: '#E8724A', exercises: ['Skull Crushers', 'Triceps Pressdown (Bar)'] },
       CARDIO_GROUP,
+      WEIGHT_GROUP,
     ]
   },
   2: {
     label: 'Tuesday',
     groups: [
-      { name: 'Back', color: '#2DBF8E', exercises: ['Barbell Row', 'Lat Pulldown', 'Meadows Row'] },
+      { name: 'Back', color: '#2DBF8E', exercises: ['Lat Pulldown', 'Cable Row', 'ISO-Lateral Row'] },
       { name: 'Biceps', color: '#4A9FE8', exercises: ['Dumbbell Preacher Curl', 'Incline Curl'] },
       CARDIO_GROUP,
+      WEIGHT_GROUP,
     ]
   },
   3: {
     label: 'Wednesday',
     groups: [
       { name: 'Shoulders', color: '#E8B84A', exercises: ['Machine Shoulder Press', 'Standing Dumbbell Lateral Raise'] },
-      { name: 'Legs', color: '#7ABF3A', exercises: ['Romanian Deadlift (RDL)', 'Leg Press', 'Leg Extension'] },
+      { name: 'Legs', color: '#7ABF3A', exercises: ['Leg Press', 'Leg Extension', 'Seated Leg Curl Machine'] },
       CARDIO_GROUP,
+      WEIGHT_GROUP,
     ]
   },
   4: {
     label: 'Thursday',
     groups: [
-      { name: 'Chest', color: '#7B72E8', exercises: ['Incline Bench Press (Barbell)', 'Dumbbell Bench Press', 'Low-to-High Cable Fly'] },
+      { name: 'Chest', color: '#7B72E8', exercises: ['Incline Bench Press (Barbell)', 'Dumbbell Bench Press', 'Low-to-High Cable Fly / ISO-Lateral Chest Press'] },
       { name: 'Triceps', color: '#E8724A', exercises: ['1-Arm Dumbbell Overhead', 'Overhead Cable Tricep Extension'] },
       CARDIO_GROUP,
+      WEIGHT_GROUP,
     ]
   },
   5: {
     label: 'Friday',
     groups: [
-      { name: 'Back', color: '#2DBF8E', exercises: ['Wide Grip Pull-up / Assisted Alt', 'Cable Row', 'Neutral Grip Lat Pulldown'] },
+      { name: 'Back', color: '#2DBF8E', exercises: ['Reverse Grip Lat Pulldown', 'Cable Lat Prayer', 'Single Arm Dumbbell Row'] },
       { name: 'Biceps', color: '#4A9FE8', exercises: ['Barbell Curl', 'Hammer Curl'] },
       CARDIO_GROUP,
+      WEIGHT_GROUP,
     ]
   },
   6: {
@@ -58,6 +75,7 @@ export const PLAN = {
       { name: 'Legs', color: '#7ABF3A', exercises: ['Squats'] },
       { name: 'Abs & Forearms', color: '#9A9A9A', exercises: ['Cable Crunch', 'Hanging Leg Raise', "Farmer's Carry"] },
       CARDIO_GROUP,
+      WEIGHT_GROUP,
     ]
   },
   0: null

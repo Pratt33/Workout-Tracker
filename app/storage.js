@@ -106,9 +106,12 @@ export function getMuscleVolume(sessionData, muscleName, dayPlan) {
   dayPlan.groups.forEach(g => {
     if (g.name !== muscleName) return;
     g.exercises.forEach(ex => {
-      (sessionData[ex] || []).forEach(s => {
-        vol += (parseFloat(s.w) || 0) * (parseInt(s.r) || 0);
-      });
+      const entry = sessionData[ex];
+      if (Array.isArray(entry)) {
+        entry.forEach(s => {
+          vol += (parseFloat(s.w) || 0) * (parseInt(s.r) || 0);
+        });
+      }
     });
   });
   return Math.round(vol);
@@ -120,9 +123,12 @@ export function getCardioMinutes(sessionData, dayPlan) {
   dayPlan.groups.forEach(g => {
     if (g.name !== 'Cardio') return;
     g.exercises.forEach(ex => {
-      (sessionData[ex] || []).forEach(s => {
-        mins += (parseFloat(s.m) || 0);
-      });
+      const entry = sessionData[ex];
+      if (Array.isArray(entry)) {
+        entry.forEach(s => { mins += (parseFloat(s.m) || 0); });
+      } else if (entry && typeof entry === 'object') {
+        mins += (parseFloat(entry.minutes) || parseFloat(entry.m) || 0);
+      }
     });
   });
   return Math.round(mins * 10) / 10;
@@ -341,4 +347,91 @@ export function buildLLMExportPayload(sessions, planMap) {
         .map(b => b.muscle),
     },
   };
+}
+
+export async function loadCustomPlan() {
+  try {
+    const raw = await AsyncStorage.getItem('custom_exercises_v1');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+export async function saveCustomPlan(plan) {
+  try { await AsyncStorage.setItem('custom_exercises_v1', JSON.stringify(plan)); } catch {}
+}
+
+export async function clearCustomPlan() {
+  try { await AsyncStorage.removeItem('custom_exercises_v1'); } catch {}
+}
+
+export async function loadRestDays() {
+  try {
+    const raw = await AsyncStorage.getItem('rest_days_v1');
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+export async function saveRestDay(dateKey, isRest) {
+  try {
+    const raw = await AsyncStorage.getItem('rest_days_v1');
+    const days = raw ? JSON.parse(raw) : {};
+    if (isRest) days[dateKey] = true;
+    else delete days[dateKey];
+    await AsyncStorage.setItem('rest_days_v1', JSON.stringify(days));
+  } catch {}
+}
+
+export function buildCSVExport(sessions, planMap) {
+  const rows = [];
+  rows.push(['Date', 'Day', 'Muscle Group', 'Exercise', 'Set', 'Weight (kg)', 'Reps', 'Volume (kg)', 'Minutes', 'Km', 'Body Weight (kg)'].join(','));
+
+  const sessionKeys = Object.keys(sessions || {})
+    .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
+    .sort();
+
+  sessionKeys.forEach(k => {
+    const session = sessions[k] || {};
+    const dow = session._dow;
+    const day = planMap?.[dow];
+    if (!day) return;
+
+    const dateLabel = k;
+    const dayLabel = day.label || '';
+
+    day.groups.forEach(g => {
+      g.exercises.forEach(ex => {
+        const entry = session[ex];
+        if (!entry) return;
+
+        if (g.name === 'Cardio' && typeof entry === 'object' && !Array.isArray(entry)) {
+          const mins = entry.minutes ?? entry.m ?? '';
+          const km = entry.km ?? '';
+          rows.push([dateLabel, dayLabel, 'Cardio', `"${ex}"`, '', '', '', '', mins, km, ''].join(','));
+        } else if (g.name === 'Weight' && typeof entry === 'object' && !Array.isArray(entry)) {
+          const kg = entry.kg ?? '';
+          rows.push([dateLabel, dayLabel, 'Weight', `"${ex}"`, '', '', '', '', '', '', kg].join(','));
+        } else if (Array.isArray(entry)) {
+          entry.forEach((set, i) => {
+            const w = parseFloat(set.w) || 0;
+            const r = parseInt(set.r) || 0;
+            const vol = w * r;
+            const setLabel = set.label || `Set ${i + 1}`;
+            rows.push([
+              dateLabel,
+              dayLabel,
+              `"${g.name}"`,
+              `"${ex}"`,
+              `"${setLabel}"`,
+              w || '',
+              r || '',
+              vol > 0 ? Math.round(vol) : '',
+              '', '', ''
+            ].join(','));
+          });
+        }
+      });
+    });
+  });
+
+  return rows.join('\n');
 }

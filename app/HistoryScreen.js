@@ -16,6 +16,7 @@ import {
   getFilteredKeys,
   loadWorkoutPlan,
   buildLLMExportPayload,
+  buildCSVExport,
 } from '../app/storage';
 import { useTheme } from '../app/theme';
 
@@ -207,11 +208,10 @@ export default function HistoryScreen() {
 
   const exportForLLM = async () => {
     try {
-      const payload = buildLLMExportPayload(sessions, planMap);
-      const json = JSON.stringify(payload, null, 2);
+      const csv = buildCSVExport(sessions, planMap);
       await Share.share({
-        title: 'Workout Data Export (LLM)',
-        message: json,
+        title: 'Workout Data Export',
+        message: csv,
       });
     } catch {
       Alert.alert('Export failed', 'Could not export workout data. Please try again.');
@@ -339,11 +339,12 @@ export default function HistoryScreen() {
 
         <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 18 }}>
           {exercises.map(ex => {
-            const sets = Array.isArray(session[ex]) ? session[ex] : [];
-            const cardio = isCardioExercise(ex);
-            const vol = cardio
-              ? sets.reduce((a, row) => a + (parseFloat(row.m) || 0), 0)
-              : sets.reduce((a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0), 0);
+                const sets = Array.isArray(session[ex]) ? session[ex] : [];
+                const cardio = isCardioExercise(ex);
+                const cardioEntry = cardio && !Array.isArray(session[ex]) ? session[ex] : null;
+                const vol = cardio
+                  ? sets.reduce((a, row) => a + (parseFloat(row.m) || 0), 0)
+                  : sets.reduce((a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0), 0);
             return (
               <TouchableOpacity
                 key={ex}
@@ -353,7 +354,9 @@ export default function HistoryScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={[s.editRowTitle, { color: t.text }]}>{ex}</Text>
                   <Text style={[s.editRowSub, { color: t.textSub }]}>
-                    {sets.length} set{sets.length !== 1 ? 's' : ''} · {Math.round(vol).toLocaleString()} {cardio ? 'min' : 'kg'}
+                      {cardio
+                        ? `${cardioEntry?.minutes ?? '0'} min · ${cardioEntry?.km ?? '0'} km`
+                        : `${sets.length} set${sets.length !== 1 ? 's' : ''} · ${Math.round(vol).toLocaleString()} kg`}
                   </Text>
                 </View>
                 <Ionicons name="create-outline" size={18} color={t.accent} />
@@ -408,7 +411,7 @@ export default function HistoryScreen() {
                 style={[s.exportBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
                 onPress={exportForLLM}
               >
-                <Text style={[s.exportBtnText, { color: t.text }]}>Export</Text>
+                <Text style={[s.exportBtnText, { color: t.text }]}>Export CSV</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.smallBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
