@@ -7,8 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
 import AppLogo from '../app/AppLogo';
-import { PLAN, MUSCLE_COLORS, MUSCLES } from '../app/data';
-import { loadSessions, formatDate, getMuscleVolume, getFilteredKeys, loadWorkoutPlan, getCardioMinutes } from '../app/storage';
+import { PLAN, MUSCLE_COLORS, MUSCLES, cardioHasDistance } from '../app/data';
+import { loadSessions, formatDate, getMuscleVolume, getFilteredKeys, loadWorkoutPlan } from '../app/storage';
 import { useTheme } from '../app/theme';
 
 const W = Dimensions.get('window').width - 48;
@@ -18,12 +18,27 @@ const FILTERS = [
   { key: 'all', label: 'All time' },
 ];
 
+const CARDIO_EXERCISES = ['Treadmill', 'Cycling', 'Plank'];
+
+function getCardioChartValue(entry, exerciseName) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (cardioHasDistance(exerciseName)) {
+    const minutes = parseFloat(entry.minutes ?? entry.m) || 0;
+    const km = parseFloat(entry.km) || 0;
+    if (minutes === 0 || km === 0) return null;
+    return Math.round((km / minutes) * 60 * 100) / 100;
+  }
+  const minutes = parseFloat(entry.minutes ?? entry.m) || 0;
+  return minutes > 0 ? minutes : null;
+}
+
 export default function ProgressScreen() {
   const t = useTheme();
   const [sessions, setSessions] = useState({});
   const [planMap, setPlanMap] = useState(PLAN);
   const [filter, setFilter] = useState('all');
   const [selectedMuscle, setSelectedMuscle] = useState('Chest');
+  const [selectedCardioExercise, setSelectedCardioExercise] = useState('Treadmill');
 
   useFocusEffect(useCallback(() => {
     Promise.all([loadSessions(), loadWorkoutPlan()]).then(([s, savedPlan]) => {
@@ -80,16 +95,16 @@ export default function ProgressScreen() {
   const getCardioData = () => {
     const pts = [];
     filteredKeys.forEach(k => {
-      const dow = sessions[k]?._dow;
-      const day = planMap[dow];
-      if (!day) return;
-      const mins = getCardioMinutes(sessions[k], day);
-      if (mins > 0) pts.push({ key: k, mins });
+      const entry = sessions[k]?.[selectedCardioExercise];
+      const value = getCardioChartValue(entry, selectedCardioExercise);
+      if (value !== null) pts.push({ key: k, value });
     });
     if (pts.length < 2) return null;
+    const isDistance = cardioHasDistance(selectedCardioExercise);
     return {
       labels: pts.map(p => formatDate(p.key)),
-      datasets: [{ data: pts.map(p => p.mins), color: () => '#F35D8A', strokeWidth: 2.5 }]
+      datasets: [{ data: pts.map(p => p.value), color: () => '#F35D8A', strokeWidth: 2.5 }],
+      _isDistanceCardio: isDistance,
     };
   };
 
@@ -107,6 +122,8 @@ export default function ProgressScreen() {
     propsForLabels: { fontSize: 9 },
     propsForBackgroundLines: { stroke: t.border, strokeWidth: 0.5 },
   });
+
+  const cardioIsDistance = !!cardioData?._isDistanceCardio;
 
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
@@ -209,15 +226,41 @@ export default function ProgressScreen() {
         </View>
 
         <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
-          <Text style={[s.cardTitle, { color: t.text }]}>Cardio minutes</Text>
-          <Text style={[s.cardSub, { color: t.textSub }]}>Total cardio minutes per session</Text>
+          <Text style={[s.cardTitle, { color: t.text }]}>{selectedCardioExercise} progress</Text>
+          <Text style={[s.cardSub, { color: t.textSub }]}> 
+            {cardioIsDistance ? 'Speed (km/h) — higher is better' : 'Duration (min) — higher is better'}
+          </Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
+            <View style={s.chipRow}>
+              {CARDIO_EXERCISES.map(exercise => {
+                const active = selectedCardioExercise === exercise;
+                return (
+                  <TouchableOpacity
+                    key={exercise}
+                    style={[
+                      s.chip,
+                      { borderColor: active ? '#F35D8A' : t.border, backgroundColor: active ? '#F35D8A22' : t.inputBg },
+                    ]}
+                    onPress={() => setSelectedCardioExercise(exercise)}
+                  >
+                    <View style={[s.chipDot, { backgroundColor: '#F35D8A' }]} />
+                    <Text style={[s.chipText, { color: active ? '#F35D8A' : t.textSub, fontWeight: active ? '600' : '400' }]}>{exercise}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
           {cardioData ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <LineChart
                 data={cardioData}
                 width={Math.max(W, cardioData.labels.length * 64)}
                 height={170}
-                chartConfig={makeChartConfig('#F35D8A')}
+                chartConfig={{
+                  ...makeChartConfig('#F35D8A'),
+                  decimalPlaces: cardioIsDistance ? 1 : 0,
+                  yAxisSuffix: cardioIsDistance ? ' km/h' : ' min',
+                }}
                 bezier
                 style={{ borderRadius: 8 }}
                 withDots={true}
@@ -228,7 +271,7 @@ export default function ProgressScreen() {
             </ScrollView>
           ) : (
             <View style={s.empty}>
-              <Text style={[s.emptyText, { color: t.textHint }]}>Log at least 2 cardio sessions to see chart</Text>
+              <Text style={[s.emptyText, { color: t.textHint }]}>Log at least 2 {selectedCardioExercise} sessions to see chart</Text>
             </View>
           )}
         </View>

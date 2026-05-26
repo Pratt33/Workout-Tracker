@@ -6,10 +6,18 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { PLAN } from './data';
-import { todayKey } from './storage';
+import { todayKey, loadDayOverrides, saveDayOverride } from './storage';
 
 const REST_KEY = 'rest_days_v1';
 const CUSTOM_KEY = 'custom_exercises_v1';
+const DAY_OPTIONS = [
+  { dow: 1, label: 'Mon' },
+  { dow: 2, label: 'Tue' },
+  { dow: 3, label: 'Wed' },
+  { dow: 4, label: 'Thu' },
+  { dow: 5, label: 'Fri' },
+  { dow: 6, label: 'Sat' },
+];
 
 const DAY_ORDER = [1, 2, 3, 4, 5, 6];
 
@@ -53,10 +61,11 @@ async function clearCustomExercises() {
   } catch {}
 }
 
-export default function SettingsModal({ visible, onClose, theme: t }) {
+export default function SettingsModal({ visible, onClose, onChanged, theme: t }) {
   const [todayRest, setTodayRest] = useState(false);
   const [expandedDays, setExpandedDays] = useState({});
   const [plan, setPlan] = useState(clonePlan(PLAN));
+  const [dayOverride, setDayOverride] = useState(null);
 
   const dayEntries = useMemo(
     () => DAY_ORDER.map(dayNum => ({ dayNum, day: plan[dayNum] })),
@@ -67,9 +76,10 @@ export default function SettingsModal({ visible, onClose, theme: t }) {
     if (!visible) return;
 
     let active = true;
-    Promise.all([loadRestDays(), loadCustomExercises()]).then(([restDays, customPlan]) => {
+    Promise.all([loadRestDays(), loadCustomExercises(), loadDayOverrides()]).then(([restDays, customPlan, overrides]) => {
       if (!active) return;
       setTodayRest(!!restDays[todayKey()]?.isRest);
+      setDayOverride(overrides[todayKey()] ?? null);
       setPlan(customPlan && typeof customPlan === 'object' ? customPlan : clonePlan(PLAN));
     });
 
@@ -90,6 +100,20 @@ export default function SettingsModal({ visible, onClose, theme: t }) {
     if (value) restDays[key] = { date: key, isRest: true };
     else delete restDays[key];
     await saveRestDays(restDays);
+  };
+
+  const selectDayOverride = async (dow) => {
+    const key = todayKey();
+    await saveDayOverride(key, dow);
+    setDayOverride(dow);
+    if (onChanged) await onChanged();
+  };
+
+  const clearDayOverride = async () => {
+    const key = todayKey();
+    await saveDayOverride(key, null);
+    setDayOverride(null);
+    if (onChanged) await onChanged();
   };
 
   const updateGroupName = (dayNum, groupIndex, value) => {
@@ -137,6 +161,37 @@ export default function SettingsModal({ visible, onClose, theme: t }) {
                   thumbColor={Platform.OS === 'android' ? '#fff' : undefined}
                 />
               </View>
+            </View>
+
+            <View style={[s.section, { borderColor: t.border, backgroundColor: t.surface }]}> 
+              <Text style={[s.sectionTitle, { color: t.text }]}>Replace Today's Day</Text>
+              <View style={s.overrideWrap}>
+                {DAY_OPTIONS.map(option => {
+                  const selected = dayOverride === option.dow;
+                  return (
+                    <TouchableOpacity
+                      key={option.dow}
+                      style={[
+                        s.overrideBtn,
+                        { borderColor: t.border, backgroundColor: t.inputBg },
+                        selected && { borderColor: t.accent, backgroundColor: t.accent },
+                      ]}
+                      onPress={() => selectDayOverride(option.dow)}
+                    >
+                      <Text style={[s.overrideBtnText, { color: selected ? '#fff' : t.text }]}>{option.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <View style={[s.row, { borderTopColor: t.border }]}> 
+                <Text style={[s.rowText, { color: t.text }]}>Active override</Text>
+                <Text style={[s.overrideValue, { color: dayOverride !== null ? t.accent : t.textSub }]}>
+                  {dayOverride !== null ? DAY_OPTIONS.find(option => option.dow === dayOverride)?.label : 'None'}
+                </Text>
+              </View>
+              <TouchableOpacity style={[s.clearOverrideBtn, { borderColor: t.border, backgroundColor: t.inputBg }]} onPress={clearDayOverride}>
+                <Text style={[s.resetText, { color: t.textSub }]}>Clear override</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={[s.section, { borderColor: t.border, backgroundColor: t.surface }]}> 
@@ -253,6 +308,25 @@ const s = StyleSheet.create({
     paddingVertical: 12,
   },
   rowText: { fontSize: 13, fontWeight: '500', flex: 1, paddingRight: 10 },
+  overrideWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, paddingBottom: 10 },
+  overrideBtn: {
+    minWidth: 52,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 0.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  overrideBtnText: { fontSize: 12, fontWeight: '600' },
+  overrideValue: { fontSize: 12, fontWeight: '600' },
+  clearOverrideBtn: {
+    borderTopWidth: 0.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    marginTop: 2,
+  },
   dayBlock: {
     borderTopWidth: 0.5,
     paddingHorizontal: 12,

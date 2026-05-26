@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { PLAN, MUSCLE_COLORS, isCardioExercise } from '../app/data';
+import { PLAN, MUSCLE_COLORS, isCardioExercise, isWeightExercise, cardioHasDistance } from '../app/data';
 import AppLogo from '../app/AppLogo';
 import {
   loadSessions,
@@ -48,6 +48,9 @@ export default function HistoryScreen() {
   const [editSessionKey, setEditSessionKey] = useState(null);
   const [activeEx, setActiveEx] = useState(null);
   const [activeSets, setActiveSets] = useState([]);
+  const [cardioMinutes, setCardioMinutes] = useState('');
+  const [cardioKm, setCardioKm] = useState('');
+  const [activeWeightKg, setActiveWeightKg] = useState('');
 
   useFocusEffect(useCallback(() => {
     Promise.all([loadSessions(), loadWorkoutPlan()]).then(([s, savedPlan]) => {
@@ -131,29 +134,75 @@ export default function HistoryScreen() {
   const openSessionEditor = (key) => {
     setEditSessionKey(key);
     setActiveEx(null);
+    setActiveWeightKg('');
   };
 
   const closeSessionEditor = () => {
     setEditSessionKey(null);
     setActiveEx(null);
+    setActiveWeightKg('');
   };
 
   const sessionExerciseList = (sessionKey) => {
     const session = sessions[sessionKey] || {};
     const dow = session._dow;
     const day = planMap[dow];
+    const localRenames = session._localRenames || {};
+    const reverseRenames = {};
+    Object.entries(localRenames).forEach(([orig, renamed]) => {
+      reverseRenames[renamed] = orig;
+    });
+
     const planned = day?.groups?.flatMap(g => g.exercises) || [];
-    const existing = Object.keys(session).filter(k => !k.startsWith('_') && Array.isArray(session[k]));
+    const existing = Object.keys(session).filter(k =>
+      !k.startsWith('_') &&
+      (Array.isArray(session[k]) || (typeof session[k] === 'object' && session[k] !== null))
+    );
     const unique = [];
-    [...planned, ...existing].forEach(ex => {
+    planned.forEach(ex => {
+      const displayName = localRenames[ex] || ex;
+      if (!unique.includes(displayName)) unique.push(displayName);
+    });
+    const renamedValues = Object.values(localRenames);
+    existing.forEach(ex => {
+      // Skip keys that are the result of a local rename — they're already represented
+      if (renamedValues.includes(ex)) return;
+      // Skip internal keys
+      if (ex.startsWith('_')) return;
       if (!unique.includes(ex)) unique.push(ex);
     });
     return unique;
   };
 
   const openExerciseEditor = (exerciseName) => {
-    const existing = sessions[editSessionKey]?.[exerciseName];
-    const cardio = isCardioExercise(exerciseName);
+    const session = sessions[editSessionKey] || {};
+    const localRenames = session._localRenames || {};
+    const reverseRenames = {};
+    Object.entries(localRenames).forEach(([orig, renamed]) => { reverseRenames[renamed] = orig; });
+    const sessionKey = localRenames[exerciseName] || exerciseName;
+    const existing = sessions[editSessionKey]?.[sessionKey];
+    if (isCardioExercise(sessionKey)) {
+      if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+        setCardioMinutes(String(existing.minutes ?? existing.m ?? ''));
+        setCardioKm(String(existing.km ?? ''));
+      } else {
+        setCardioMinutes('');
+        setCardioKm('');
+      }
+      setActiveSets([]);
+      setActiveWeightKg('');
+      setActiveEx(sessionKey);
+      return;
+    }
+    if (isWeightExercise(sessionKey)) {
+      setActiveWeightKg(existing && typeof existing === 'object' ? String(existing.kg ?? '') : '');
+      setActiveSets([]);
+      setCardioMinutes('');
+      setCardioKm('');
+      setActiveEx(sessionKey);
+      return;
+    }
+    const cardio = isCardioExercise(sessionKey);
     const nextDefault = cardio ? EMPTY_CARDIO_SETS() : EMPTY_SETS();
     if (existing?.length) {
       if (cardio) {
@@ -165,7 +214,10 @@ export default function HistoryScreen() {
     } else {
       setActiveSets(nextDefault);
     }
-    setActiveEx(exerciseName);
+    setCardioMinutes('');
+    setCardioKm('');
+    setActiveWeightKg('');
+    setActiveEx(sessionKey);
   };
 
   const updateSet = (i, field, val) => {
@@ -177,7 +229,13 @@ export default function HistoryScreen() {
   const saveExerciseEdits = async () => {
     const next = { ...sessions };
     if (!next[editSessionKey]) return;
-    next[editSessionKey][activeEx] = activeSets;
+    if (isWeightExercise(activeEx)) {
+      next[editSessionKey][activeEx] = { kg: activeWeightKg };
+    } else if (isCardioExercise(activeEx)) {
+      next[editSessionKey][activeEx] = { minutes: cardioMinutes, km: cardioKm };
+    } else {
+      next[editSessionKey][activeEx] = activeSets;
+    }
     setSessions(next);
     await saveSessions(next);
     setActiveEx(null);
@@ -220,9 +278,12 @@ export default function HistoryScreen() {
 
   if (editSessionKey && activeEx) {
     const activeIsCardio = isCardioExercise(activeEx);
+    const activeIsWeight = isWeightExercise(activeEx);
     const totalVol = activeIsCardio
-      ? activeSets.reduce((a, s) => a + (parseFloat(s.m) || 0), 0)
-      : activeSets.reduce((a, s) => a + (parseFloat(s.w) || 0) * (parseInt(s.r) || 0), 0);
+      ? (parseFloat(cardioMinutes) || 0)
+      : activeIsWeight
+        ? 0
+        : activeSets.reduce((a, s) => a + (parseFloat(s.w) || 0) * (parseInt(s.r) || 0), 0);
     return (
       <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
         <View style={[s.topbar, { backgroundColor: t.surface, borderBottomColor: t.border }]}>
@@ -236,45 +297,81 @@ export default function HistoryScreen() {
 
         <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 18 }}>
           <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
-            <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
-              <Text style={[s.setColHdr, { flex: activeIsCardio ? 2 : 1.4, color: t.textHint }]}>Set</Text>
-              {activeIsCardio ? (
-                <>
-                  <Text style={[s.setColHdr, { flex: 1.2, textAlign: 'center', color: t.textHint }]}>Minutes</Text>
-                  <Text style={[s.setColHdr, { flex: 0.8, textAlign: 'right', color: t.textHint }]}>Total</Text>
-                </>
-              ) : (
-                <>
+            {activeIsWeight ? (
+              <>
+                <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
+                  <Text style={[s.setColHdr, { color: t.textHint }]}>Body weight (kg)</Text>
+                </View>
+                <View style={{ padding: 14 }}>
+                  <TextInput
+                    style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text, width: '60%', alignSelf: 'center' }]}
+                    value={activeWeightKg}
+                    onChangeText={setActiveWeightKg}
+                    placeholder="kg"
+                    placeholderTextColor={t.textHint}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </>
+            ) : activeIsCardio ? (
+              <>
+                <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
+                  <Text style={[s.setColHdr, { flex: 1.2, color: t.textHint }]}>Exercise</Text>
+                  <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Minutes</Text>
+                  {cardioHasDistance(activeEx) && (
+                    <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Km</Text>
+                  )}
+                </View>
+                <View style={[s.setRow, { borderTopColor: t.border }]}> 
+                  <Text style={[s.setLabel, { color: t.textSub }, { flex: 1.2 }]}>{activeEx}</Text>
+                  <View style={{ flex: 1, paddingHorizontal: 4 }}>
+                    <TextInput
+                      style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
+                      value={cardioMinutes}
+                      onChangeText={setCardioMinutes}
+                      placeholder="min"
+                      placeholderTextColor={t.textHint}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                  {cardioHasDistance(activeEx) && (
+                    <View style={{ flex: 1, paddingHorizontal: 4 }}>
+                      <TextInput
+                        style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
+                        value={cardioKm}
+                        onChangeText={setCardioKm}
+                        placeholder="km"
+                        placeholderTextColor={t.textHint}
+                        keyboardType="decimal-pad"
+                      />
+                    </View>
+                  )}
+                </View>
+                <View style={[s.totalRow, { borderTopColor: t.border }]}> 
+                  <Text style={[s.totalLabel, { color: t.textSub }]}>
+                    {cardioHasDistance(activeEx) ? 'Distance' : 'Duration'}
+                  </Text>
+                  <Text style={[s.totalVal, { color: t.text }]}>
+                    {cardioHasDistance(activeEx)
+                      ? `${cardioKm || '0'} km`
+                      : `${cardioMinutes || '0'} min`}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
+                  <Text style={[s.setColHdr, { flex: 1.4, color: t.textHint }]}>Set</Text>
                   <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Weight kg</Text>
                   <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Reps</Text>
                   <Text style={[s.setColHdr, { flex: 0.8, textAlign: 'right', color: t.textHint }]}>Vol</Text>
-                </>
-              )}
-            </View>
+                </View>
 
-            {activeSets.map((set, i) => {
-              const vol = activeIsCardio
-                ? (parseFloat(set.m) || 0)
-                : (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
-              return (
-                <View key={i} style={[s.setRow, { borderTopColor: t.border }]}> 
-                  <Text style={[s.setLabel, { color: set.dead ? t.deadColor : t.textSub }, { flex: activeIsCardio ? 2 : 1.4 }]}>{set.label}</Text>
-                  {activeIsCardio ? (
-                    <>
-                      <View style={{ flex: 1.2, paddingHorizontal: 4 }}>
-                        <TextInput
-                          style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                          value={set.m}
-                          onChangeText={v => updateSet(i, 'm', v)}
-                          placeholder="min"
-                          placeholderTextColor={t.textHint}
-                          keyboardType="decimal-pad"
-                        />
-                      </View>
-                      <Text style={[s.setVol, { flex: 0.8, color: vol > 0 ? t.accent : t.textHint }]}>{vol > 0 ? Math.round(vol) + 'm' : '-'} </Text>
-                    </>
-                  ) : (
-                    <>
+                {activeSets.map((set, i) => {
+                  const vol = (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
+                  return (
+                    <View key={i} style={[s.setRow, { borderTopColor: t.border }]}> 
+                      <Text style={[s.setLabel, { color: set.dead ? t.deadColor : t.textSub }, { flex: 1.4 }]}>{set.label}</Text>
                       <View style={{ flex: 1, paddingHorizontal: 4 }}>
                         <TextInput
                           style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
@@ -296,16 +393,16 @@ export default function HistoryScreen() {
                         />
                       </View>
                       <Text style={[s.setVol, { flex: 0.8, color: vol > 0 ? t.accent : t.textHint }]}>{vol > 0 ? Math.round(vol) + '' : '-'} </Text>
-                    </>
-                  )}
-                </View>
-              );
-            })}
+                    </View>
+                  );
+                })}
 
-            <View style={[s.totalRow, { borderTopColor: t.border }]}> 
-              <Text style={[s.totalLabel, { color: t.textSub }]}>{activeIsCardio ? 'Total minutes' : 'Total volume'}</Text>
-              <Text style={[s.totalVal, { color: t.text }]}>{activeIsCardio ? `${Math.round(totalVol).toLocaleString()} min` : `${Math.round(totalVol).toLocaleString()} kg`}</Text>
-            </View>
+                <View style={[s.totalRow, { borderTopColor: t.border }]}> 
+                  <Text style={[s.totalLabel, { color: t.textSub }]}>Total volume</Text>
+                  <Text style={[s.totalVal, { color: t.text }]}>{`${Math.round(totalVol).toLocaleString()} kg`}</Text>
+                </View>
+              </>
+            )}
           </View>
 
           <View style={s.actionRow}>
@@ -328,7 +425,7 @@ export default function HistoryScreen() {
     const exercises = sessionExerciseList(editSessionKey);
     return (
       <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
-        <View style={[s.topbar, { backgroundColor: t.surface, borderBottomColor: t.border }]}>
+        <View style={[s.topbar, { backgroundColor: t.surface, borderBottomColor: t.border }]}> 
           <TouchableOpacity style={[s.backChip, { backgroundColor: t.inputBg, borderColor: t.border }]} onPress={closeSessionEditor}>
             <Ionicons name="chevron-back" size={16} color={t.accent} />
             <Text style={[s.backChipText, { color: t.accent }]}>History</Text>
@@ -339,12 +436,12 @@ export default function HistoryScreen() {
 
         <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 18 }}>
           {exercises.map(ex => {
-                const sets = Array.isArray(session[ex]) ? session[ex] : [];
-                const cardio = isCardioExercise(ex);
-                const cardioEntry = cardio && !Array.isArray(session[ex]) ? session[ex] : null;
-                const vol = cardio
-                  ? sets.reduce((a, row) => a + (parseFloat(row.m) || 0), 0)
-                  : sets.reduce((a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0), 0);
+            const sets = Array.isArray(session[ex]) ? session[ex] : [];
+            const cardio = isCardioExercise(ex);
+            const cardioEntry = cardio && !Array.isArray(session[ex]) ? session[ex] : null;
+            const vol = cardio
+              ? sets.reduce((a, row) => a + (parseFloat(row.m) || 0), 0)
+              : sets.reduce((a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0), 0);
             return (
               <TouchableOpacity
                 key={ex}
@@ -354,9 +451,9 @@ export default function HistoryScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={[s.editRowTitle, { color: t.text }]}>{ex}</Text>
                   <Text style={[s.editRowSub, { color: t.textSub }]}>
-                      {cardio
-                        ? `${cardioEntry?.minutes ?? '0'} min · ${cardioEntry?.km ?? '0'} km`
-                        : `${sets.length} set${sets.length !== 1 ? 's' : ''} · ${Math.round(vol).toLocaleString()} kg`}
+                    {cardio
+                      ? `${cardioEntry?.minutes ?? '0'} min · ${cardioEntry?.km ?? '0'} km`
+                      : `${sets.length} set${sets.length !== 1 ? 's' : ''} · ${Math.round(vol).toLocaleString()} kg`}
                   </Text>
                 </View>
                 <Ionicons name="create-outline" size={18} color={t.accent} />
@@ -381,8 +478,8 @@ export default function HistoryScreen() {
   }
 
   return (
-    <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
-      <View style={[s.topbar, { backgroundColor: t.surface, borderBottomColor: t.border }]}>
+    <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}> 
+      <View style={[s.topbar, { backgroundColor: t.surface, borderBottomColor: t.border }]}> 
         <View style={s.topbarRow}>
           <View style={{ flex: 1 }}>
             <View style={s.titleWrap}>

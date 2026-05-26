@@ -1,7 +1,13 @@
 export const CARDIO_EXERCISES = ['Treadmill', 'Cycling', 'Plank'];
 
+export const CARDIO_NO_DISTANCE = ['Plank'];
+
 export function isCardioExercise(exerciseName) {
   return CARDIO_EXERCISES.includes(exerciseName);
+}
+
+export function cardioHasDistance(exerciseName) {
+  return CARDIO_EXERCISES.includes(exerciseName) && !CARDIO_NO_DISTANCE.includes(exerciseName);
 }
 
 const CARDIO_GROUP = {

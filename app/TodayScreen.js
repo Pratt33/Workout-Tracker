@@ -18,17 +18,16 @@ import Svg, { Path, Circle } from 'react-native-svg';
 import { useTheme } from '../app/theme';
 import AppLogo from '../app/AppLogo';
 import SettingsModal from './SettingsModal';
-import { PLAN as DEFAULT_PLAN, isCardioExercise, isWeightExercise } from '../app/data';
+import { PLAN as DEFAULT_PLAN, isCardioExercise, isWeightExercise, cardioHasDistance } from '../app/data';
 import {
   loadSessions,
   saveSessions,
   todayKey,
-  renameExerciseInSessions,
   getLatestExerciseSets,
   formatDate,
   loadCustomPlan,
   loadRestDays,
-  saveCustomPlan,
+  loadDayOverrides,
 } from '../app/storage';
 
 const EMPTY_SETS = () => [
@@ -133,25 +132,32 @@ export default function TodayScreen() {
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [isRestDay, setIsRestDay] = useState(false);
   const [showRestBanner, setShowRestBanner] = useState(true);
+  const [dayOverride, setDayOverride] = useState(null);
   const slideAnim = useRef(new Animated.Value(60)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const saveScaleAnim = useRef(new Animated.Value(1)).current;
 
   const dow = new Date().getDay();
   const tk = todayKey();
-  const day = plan[dow];
+  const effectiveDow = dayOverride !== null ? dayOverride : dow;
+  const day = plan[effectiveDow];
 
   const loadScreenData = useCallback(async () => {
     const loadedSessions = await loadSessions();
     const customPlan = await loadCustomPlan();
     const restDays = await loadRestDays();
-    if (!loadedSessions[tk]) loadedSessions[tk] = { _dow: dow };
+    const overrides = await loadDayOverrides();
+    const todayOverride = overrides[tk] ?? null;
+    setDayOverride(todayOverride);
+    const effectiveDowLocal = todayOverride !== null ? todayOverride : dow;
+    if (!loadedSessions[tk]) loadedSessions[tk] = { _dow: effectiveDowLocal };
+    else loadedSessions[tk] = { ...loadedSessions[tk], _dow: effectiveDowLocal };
     const nextPlan = customPlan && typeof customPlan === 'object' ? customPlan : DEFAULT_PLAN;
     const restStatus = !!restDays[tk];
     setSessions({ ...loadedSessions });
     setPlan(nextPlan);
-    setIsRestDay(restStatus || !nextPlan[dow]);
-    setShowRestBanner(restStatus || !nextPlan[dow]);
+    setIsRestDay(restStatus || !nextPlan[effectiveDowLocal]);
+    setShowRestBanner(restStatus || !nextPlan[effectiveDowLocal]);
   }, [dow, tk]);
 
   useFocusEffect(
@@ -182,9 +188,16 @@ export default function TodayScreen() {
       setCardioKm('');
       setWeightKg(current && typeof current === 'object' ? String(current.kg ?? '') : '');
     } else {
+      const localRenames = sessions[tk]?._localRenames || {};
+      const reverseRenames = {};
+      Object.entries(localRenames).forEach(([orig, renamed]) => {
+        reverseRenames[renamed] = orig;
+      });
+      // Look up past sessions using original name so prefill works across renames
+      const originalName = reverseRenames[ex] || ex;
       const latestResult = Array.isArray(current) && current.length > 0
-        ? { sets: current }
-        : getLatestExerciseSets(sessions, ex, tk);
+        ? { sets: current, dateKey: tk }
+        : getLatestExerciseSets(sessions, originalName, tk);
       const latestSets = Array.isArray(latestResult?.sets) && latestResult.sets.length > 0
         ? latestResult.sets
         : EMPTY_SETS();
@@ -214,7 +227,7 @@ export default function TodayScreen() {
   const saveExercise = async () => {
     if (!activeEx || !day) return;
     const nextSessions = { ...sessions };
-    nextSessions[tk] = { ...(nextSessions[tk] || {}), _dow: dow };
+    nextSessions[tk] = { ...(nextSessions[tk] || {}), _dow: effectiveDow };
     nextSessions[tk][activeEx] = isCardioExercise(activeEx)
       ? { minutes: cardioMinutes, km: cardioKm }
       : isWeightExercise(activeEx)
@@ -250,16 +263,25 @@ export default function TodayScreen() {
       return;
     }
 
-    const nextPlan = JSON.parse(JSON.stringify(plan));
-    nextPlan[dow].groups[editingEx.groupIndex].exercises[editingEx.exerciseIndex] = trimmed;
-    await saveCustomPlan(nextPlan);
+    const oldName = editingEx.oldName;
+    const nextSessions = { ...sessions };
+    if (!nextSessions[tk]) nextSessions[tk] = { _dow: dow };
 
-    const migrated = renameExerciseInSessions(sessions, editingEx.oldName, trimmed);
-    if (migrated.changed) await saveSessions(migrated.sessions);
+    // Move any logged data from old name to new name within today's session only
+    if (nextSessions[tk][oldName] !== undefined) {
+      nextSessions[tk][trimmed] = nextSessions[tk][oldName];
+      delete nextSessions[tk][oldName];
+    }
 
-    setPlan(nextPlan);
-    setSessions({ ...migrated.sessions });
-    if (activeEx === editingEx.oldName) setActiveEx(trimmed);
+    // Store local rename map so the home screen displays the new name today
+    const renames = nextSessions[tk]._localRenames
+      ? { ...nextSessions[tk]._localRenames }
+      : {};
+    renames[oldName] = trimmed;
+    nextSessions[tk]._localRenames = renames;
+
+    await saveSessions(nextSessions);
+    setSessions(nextSessions);
     cancelEditingExercise();
   };
 
@@ -355,7 +377,9 @@ export default function TodayScreen() {
                   <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
                     <Text style={[s.setColHdr, { flex: 1.2, color: t.textHint }]}>Exercise</Text>
                     <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Minutes</Text>
-                    <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Km</Text>
+                    {cardioHasDistance(activeEx) && (
+                      <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Km</Text>
+                    )}
                   </View>
                   <View style={[s.setRow, { borderTopColor: t.border }]}> 
                     <Text style={[s.setLabel, { color: t.textSub }, { flex: 1.2 }]}>{activeEx}</Text>
@@ -369,20 +393,28 @@ export default function TodayScreen() {
                         keyboardType="decimal-pad"
                       />
                     </View>
-                    <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                      <TextInput
-                        style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                        value={cardioKm}
-                        onChangeText={setCardioKm}
-                        placeholder="km"
-                        placeholderTextColor={t.textHint}
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
+                    {cardioHasDistance(activeEx) && (
+                      <View style={{ flex: 1, paddingHorizontal: 4 }}>
+                        <TextInput
+                          style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
+                          value={cardioKm}
+                          onChangeText={setCardioKm}
+                          placeholder="km"
+                          placeholderTextColor={t.textHint}
+                          keyboardType="decimal-pad"
+                        />
+                      </View>
+                    )}
                   </View>
                   <View style={[s.totalRow, { borderTopColor: t.border }]}> 
-                    <Text style={[s.totalLabel, { color: t.textSub }]}>Total minutes</Text>
-                    <Text style={[s.totalVal, { color: t.text }]}>{`${cardioMinutes || '0'} min`}</Text>
+                    <Text style={[s.totalLabel, { color: t.textSub }]}> 
+                      {cardioHasDistance(activeEx) ? 'Distance' : 'Duration'}
+                    </Text>
+                    <Text style={[s.totalVal, { color: t.text }]}> 
+                      {cardioHasDistance(activeEx)
+                        ? `${cardioKm || '0'} km`
+                        : `${cardioMinutes || '0'} min`}
+                    </Text>
                   </View>
                 </>
               ) : activeIsWeight ? (
@@ -446,7 +478,7 @@ export default function TodayScreen() {
               )}
             </View>
             <View style={s.deadNote}>
-              {!activeIsCardio && <Text style={[s.deadNoteText, { color: t.textHint }]}>{'Set 3 -> Drop 1 -> Drop 2 are dead sets - no rest between them'}</Text>}
+              {!activeIsCardio && !activeIsWeight && <Text style={[s.deadNoteText, { color: t.textHint }]}>{'Set 3 -> Drop 1 -> Drop 2 are dead sets - no rest between them'}</Text>}
             </View>
             <Animated.View style={{ transform: [{ scale: saveScaleAnim }] }}>
               <TouchableOpacity
@@ -483,7 +515,7 @@ export default function TodayScreen() {
         <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 16 }}>
           {renderRestBanner()}
         </ScrollView>
-        <SettingsModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} theme={t} />
+        <SettingsModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} onChanged={loadScreenData} theme={t} />
       </SafeAreaView>
     );
   }
@@ -514,7 +546,8 @@ export default function TodayScreen() {
         {showRestView ? renderRestBanner() : null}
         {!showRestView &&
           day.groups.map((group, groupIndex) => {
-            const done = group.exercises.filter(ex => isExerciseDone(ex)).length;
+            const localRenames = sessions[tk]?._localRenames || {};
+            const done = group.exercises.filter(ex => isExerciseDone(localRenames[ex] || ex)).length;
             return (
               <View key={groupIndex} style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
                 <View style={[s.groupHdr, { borderBottomColor: t.border }]}> 
@@ -524,17 +557,21 @@ export default function TodayScreen() {
                     <Text style={[s.badgeText, { color: done === group.exercises.length ? t.success : t.textSub }]}>{done}/{group.exercises.length}</Text>
                   </View>
                 </View>
-                {group.exercises.map((ex, exerciseIndex) => (
-                  <AnimatedExRow
-                    key={exerciseIndex}
-                    ex={ex}
-                    isDone={isExerciseDone(ex)}
-                    onPress={() => openLogger(ex)}
-                    onEdit={() => startEditingExercise(groupIndex, exerciseIndex, ex)}
-                    index={exerciseIndex}
-                    t={t}
-                  />
-                ))}
+                {group.exercises.map((ex, exerciseIndex) => {
+                  const displayEx = localRenames[ex] || ex;
+                  const sessionKey = localRenames[ex] ? localRenames[ex] : ex;
+                  return (
+                    <AnimatedExRow
+                      key={exerciseIndex}
+                      ex={displayEx}
+                      isDone={isExerciseDone(sessionKey)}
+                      onPress={() => openLogger(sessionKey)}
+                      onEdit={() => startEditingExercise(groupIndex, exerciseIndex, ex)}
+                      index={exerciseIndex}
+                      t={t}
+                    />
+                  );
+                })}
               </View>
             );
           })}

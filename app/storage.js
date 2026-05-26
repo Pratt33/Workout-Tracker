@@ -381,6 +381,23 @@ export async function saveRestDay(dateKey, isRest) {
   } catch {}
 }
 
+export async function saveDayOverride(dateKey, overrideDow) {
+  try {
+    const raw = await AsyncStorage.getItem('day_overrides_v1');
+    const overrides = raw ? JSON.parse(raw) : {};
+    if (overrideDow === null) delete overrides[dateKey];
+    else overrides[dateKey] = overrideDow;
+    await AsyncStorage.setItem('day_overrides_v1', JSON.stringify(overrides));
+  } catch {}
+}
+
+export async function loadDayOverrides() {
+  try {
+    const raw = await AsyncStorage.getItem('day_overrides_v1');
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
 export function buildCSVExport(sessions, planMap) {
   const rows = [];
   rows.push(['Date', 'Day', 'Muscle Group', 'Exercise', 'Set', 'Weight (kg)', 'Reps', 'Volume (kg)', 'Minutes', 'Km', 'Body Weight (kg)'].join(','));
