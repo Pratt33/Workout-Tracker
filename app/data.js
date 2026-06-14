@@ -1,19 +1,42 @@
-export const CARDIO_EXERCISES = ['Treadmill', 'Cycling', 'Plank'];
+export const DEFAULT_CARDIO_CONFIG = [
+  { name: 'Walking', metric: 'steps+km', stepGoal: 10000 },
+  { name: 'Cycling', metric: 'minutes+km' },
+  { name: 'Plank', metric: 'minutes' },
+];
 
-export const CARDIO_NO_DISTANCE = ['Plank'];
+// These functions accept an optional cardioConfig array.
+// If not passed they fall back to DEFAULT_CARDIO_CONFIG.
+// All screens should pass the loaded config from AsyncStorage.
 
-export function isCardioExercise(exerciseName) {
-  return CARDIO_EXERCISES.includes(exerciseName);
+export function isCardioExercise(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
+  return config.some(c => c.name === exerciseName);
 }
 
-export function cardioHasDistance(exerciseName) {
-  return CARDIO_EXERCISES.includes(exerciseName) && !CARDIO_NO_DISTANCE.includes(exerciseName);
+export function getCardioEntry(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
+  return config.find(c => c.name === exerciseName) || null;
+}
+
+export function cardioHasDistance(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
+  const entry = getCardioEntry(exerciseName, config);
+  return entry ? ['minutes+km', 'steps+km'].includes(entry.metric) : false;
+}
+
+export function cardioHasSteps(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
+  const entry = getCardioEntry(exerciseName, config);
+  return entry ? entry.metric === 'steps+km' : false;
+}
+
+export function cardioMetric(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
+  const entry = getCardioEntry(exerciseName, config);
+  return entry ? entry.metric : null;
 }
 
 const CARDIO_GROUP = {
   name: 'Cardio',
   color: '#F35D8A',
-  exercises: CARDIO_EXERCISES,
+  get exercises() {
+    return DEFAULT_CARDIO_CONFIG.map(c => c.name);
+  },
 };
 
 export const WEIGHT_EXERCISES = ['Body Weight'];
@@ -98,3 +121,15 @@ export const MUSCLE_COLORS = {
 };
 
 export const MUSCLES = Object.keys(MUSCLE_COLORS);
+
+export function applyCardioConfigToPlan(plan, cardioConfig) {
+  if (!plan || !cardioConfig) return plan;
+  const result = JSON.parse(JSON.stringify(plan));
+  Object.keys(result).forEach(dow => {
+    const day = result[dow];
+    if (!day?.groups) return;
+    const cardioGroup = day.groups.find(g => g.name === 'Cardio');
+    if (cardioGroup) cardioGroup.exercises = cardioConfig.map(c => c.name);
+  });
+  return result;
+}

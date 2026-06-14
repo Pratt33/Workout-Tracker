@@ -6,7 +6,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { PLAN, MUSCLE_COLORS, isCardioExercise, isWeightExercise, cardioHasDistance } from '../app/data';
+import CardioLogger from './CardioLogger';
+import {
+  PLAN,
+  MUSCLE_COLORS,
+  DEFAULT_CARDIO_CONFIG,
+  applyCardioConfigToPlan,
+  isCardioExercise,
+  isWeightExercise,
+  cardioHasDistance,
+  cardioMetric,
+} from '../app/data';
 import AppLogo from '../app/AppLogo';
 import {
   loadSessions,
@@ -17,6 +27,7 @@ import {
   loadWorkoutPlan,
   buildLLMExportPayload,
   buildCSVExport,
+  loadCardioConfig,
 } from '../app/storage';
 import { useTheme } from '../app/theme';
 
@@ -34,10 +45,6 @@ const EMPTY_SETS = () => [
   { label: 'Drop 2', w: '', r: '', dead: true },
 ];
 
-const EMPTY_CARDIO_SETS = () => [
-  { label: 'Minute Slot 1', m: '' },
-];
-
 export default function HistoryScreen() {
   const t = useTheme();
   const [sessions, setSessions] = useState({});
@@ -50,13 +57,16 @@ export default function HistoryScreen() {
   const [activeSets, setActiveSets] = useState([]);
   const [cardioMinutes, setCardioMinutes] = useState('');
   const [cardioKm, setCardioKm] = useState('');
+  const [cardioSteps, setCardioSteps] = useState('');
+  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
   const [activeWeightKg, setActiveWeightKg] = useState('');
 
   useFocusEffect(useCallback(() => {
-    Promise.all([loadSessions(), loadWorkoutPlan()]).then(([s, savedPlan]) => {
+    Promise.all([loadSessions(), loadWorkoutPlan(), loadCardioConfig()]).then(([s, savedPlan, savedCardioConfig]) => {
       setSessions(s);
-      if (savedPlan && typeof savedPlan === 'object') setPlanMap(savedPlan);
-      else setPlanMap(PLAN);
+      setCardioConfig(savedCardioConfig || DEFAULT_CARDIO_CONFIG);
+      const liveConfig = savedCardioConfig || DEFAULT_CARDIO_CONFIG;
+      setPlanMap(applyCardioConfigToPlan(savedPlan || PLAN, liveConfig));
     });
   }, []));
 
@@ -181,17 +191,19 @@ export default function HistoryScreen() {
     Object.entries(localRenames).forEach(([orig, renamed]) => { reverseRenames[renamed] = orig; });
     const sessionKey = localRenames[exerciseName] || exerciseName;
     const existing = sessions[editSessionKey]?.[sessionKey];
-    if (isCardioExercise(sessionKey)) {
-      if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
-        setCardioMinutes(String(existing.minutes ?? existing.m ?? ''));
-        setCardioKm(String(existing.km ?? ''));
+    if (isCardioExercise(exerciseName, cardioConfig)) {
+      const entry = sessions[editSessionKey]?.[exerciseName];
+      if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+        setCardioMinutes(String(entry.minutes ?? entry.m ?? ''));
+        setCardioKm(String(entry.km ?? ''));
+        setCardioSteps(String(entry.steps ?? ''));
       } else {
         setCardioMinutes('');
         setCardioKm('');
+        setCardioSteps('');
       }
       setActiveSets([]);
-      setActiveWeightKg('');
-      setActiveEx(sessionKey);
+      setActiveEx(exerciseName);
       return;
     }
     if (isWeightExercise(sessionKey)) {
@@ -202,8 +214,8 @@ export default function HistoryScreen() {
       setActiveEx(sessionKey);
       return;
     }
-    const cardio = isCardioExercise(sessionKey);
-    const nextDefault = cardio ? EMPTY_CARDIO_SETS() : EMPTY_SETS();
+    const cardio = isCardioExercise(sessionKey, cardioConfig);
+    const nextDefault = EMPTY_SETS();
     if (existing?.length) {
       if (cardio) {
         const total = existing.reduce((a, s) => a + (parseFloat(s.m) || 0), 0);
@@ -231,8 +243,12 @@ export default function HistoryScreen() {
     if (!next[editSessionKey]) return;
     if (isWeightExercise(activeEx)) {
       next[editSessionKey][activeEx] = { kg: activeWeightKg };
-    } else if (isCardioExercise(activeEx)) {
-      next[editSessionKey][activeEx] = { minutes: cardioMinutes, km: cardioKm };
+    } else if (isCardioExercise(activeEx, cardioConfig)) {
+      next[editSessionKey][activeEx] = {
+        minutes: cardioMinutes,
+        km: cardioKm,
+        steps: cardioSteps,
+      };
     } else {
       next[editSessionKey][activeEx] = activeSets;
     }
@@ -277,7 +293,7 @@ export default function HistoryScreen() {
   };
 
   if (editSessionKey && activeEx) {
-    const activeIsCardio = isCardioExercise(activeEx);
+    const activeIsCardio = isCardioExercise(activeEx, cardioConfig);
     const activeIsWeight = isWeightExercise(activeEx);
     const totalVol = activeIsCardio
       ? (parseFloat(cardioMinutes) || 0)
@@ -297,7 +313,18 @@ export default function HistoryScreen() {
 
         <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 18 }}>
           <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
-            {activeIsWeight ? (
+            {activeIsCardio && (
+              <CardioLogger
+                exerciseName={activeEx}
+                cardioConfig={cardioConfig}
+                minutes={cardioMinutes} onMinutesChange={setCardioMinutes}
+                km={cardioKm} onKmChange={setCardioKm}
+                steps={cardioSteps} onStepsChange={setCardioSteps}
+                theme={t}
+                styles={s}
+              />
+            )}
+            {!activeIsCardio && activeIsWeight ? (
               <>
                 <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
                   <Text style={[s.setColHdr, { color: t.textHint }]}>Body weight (kg)</Text>
@@ -313,52 +340,7 @@ export default function HistoryScreen() {
                   />
                 </View>
               </>
-            ) : activeIsCardio ? (
-              <>
-                <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
-                  <Text style={[s.setColHdr, { flex: 1.2, color: t.textHint }]}>Exercise</Text>
-                  <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Minutes</Text>
-                  {cardioHasDistance(activeEx) && (
-                    <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Km</Text>
-                  )}
-                </View>
-                <View style={[s.setRow, { borderTopColor: t.border }]}> 
-                  <Text style={[s.setLabel, { color: t.textSub }, { flex: 1.2 }]}>{activeEx}</Text>
-                  <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                    <TextInput
-                      style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                      value={cardioMinutes}
-                      onChangeText={setCardioMinutes}
-                      placeholder="min"
-                      placeholderTextColor={t.textHint}
-                      keyboardType="decimal-pad"
-                    />
-                  </View>
-                  {cardioHasDistance(activeEx) && (
-                    <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                      <TextInput
-                        style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                        value={cardioKm}
-                        onChangeText={setCardioKm}
-                        placeholder="km"
-                        placeholderTextColor={t.textHint}
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
-                  )}
-                </View>
-                <View style={[s.totalRow, { borderTopColor: t.border }]}> 
-                  <Text style={[s.totalLabel, { color: t.textSub }]}>
-                    {cardioHasDistance(activeEx) ? 'Distance' : 'Duration'}
-                  </Text>
-                  <Text style={[s.totalVal, { color: t.text }]}>
-                    {cardioHasDistance(activeEx)
-                      ? `${cardioKm || '0'} km`
-                      : `${cardioMinutes || '0'} min`}
-                  </Text>
-                </View>
-              </>
-            ) : (
+            ) : !activeIsCardio ? (
               <>
                 <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
                   <Text style={[s.setColHdr, { flex: 1.4, color: t.textHint }]}>Set</Text>
@@ -402,7 +384,7 @@ export default function HistoryScreen() {
                   <Text style={[s.totalVal, { color: t.text }]}>{`${Math.round(totalVol).toLocaleString()} kg`}</Text>
                 </View>
               </>
-            )}
+            ) : null}
           </View>
 
           <View style={s.actionRow}>
@@ -437,11 +419,7 @@ export default function HistoryScreen() {
         <ScrollView style={s.scroll} contentContainerStyle={{ paddingBottom: 18 }}>
           {exercises.map(ex => {
             const sets = Array.isArray(session[ex]) ? session[ex] : [];
-            const cardio = isCardioExercise(ex);
-            const cardioEntry = cardio && !Array.isArray(session[ex]) ? session[ex] : null;
-            const vol = cardio
-              ? sets.reduce((a, row) => a + (parseFloat(row.m) || 0), 0)
-              : sets.reduce((a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0), 0);
+            const vol = sets.reduce((a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0), 0);
             return (
               <TouchableOpacity
                 key={ex}
@@ -451,9 +429,24 @@ export default function HistoryScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={[s.editRowTitle, { color: t.text }]}>{ex}</Text>
                   <Text style={[s.editRowSub, { color: t.textSub }]}>
-                    {cardio
-                      ? `${cardioEntry?.minutes ?? '0'} min · ${cardioEntry?.km ?? '0'} km`
-                      : `${sets.length} set${sets.length !== 1 ? 's' : ''} · ${Math.round(vol).toLocaleString()} kg`}
+                    {isWeightExercise(ex)
+                      ? (() => {
+                          const entry = session[ex];
+                          const kg = entry && typeof entry === 'object' ? entry.kg : null;
+                          return kg ? `${kg} kg` : 'Not logged';
+                        })()
+                      : isCardioExercise(ex, cardioConfig)
+                        ? (() => {
+                            const entry = session[ex];
+                            if (!entry || typeof entry !== 'object') return 'Not logged';
+                            const metric = cardioMetric(ex, cardioConfig);
+                            const parts = [];
+                            if (entry.minutes) parts.push(`${entry.minutes} min`);
+                            if (entry.steps) parts.push(`${parseInt(entry.steps).toLocaleString()} steps`);
+                            if (entry.km && cardioHasDistance(ex, cardioConfig)) parts.push(`${entry.km} km`);
+                            return parts.length > 0 ? parts.join(' · ') : 'Not logged';
+                          })()
+                        : `${sets.length} set${sets.length !== 1 ? 's' : ''} · ${Math.round(vol).toLocaleString()} kg`}
                   </Text>
                 </View>
                 <Ionicons name="create-outline" size={18} color={t.accent} />
@@ -546,9 +539,15 @@ export default function HistoryScreen() {
           const isRest = !!sessions[k]?._rest;
           const vol = getSessionVolume(sessions[k]);
           const selected = selectedKeys.includes(k);
-          const musclesDone = day?.groups.filter(g =>
-            g.exercises.some(ex => sessions[k]?.[ex]?.length > 0)
-          ) || [];
+          const musclesDone = day?.groups.filter(g => {
+            if (g.name === 'Cardio' || g.name === 'Weight') return false;
+            return g.exercises.some(ex => {
+              const localRenames = sessions[k]?._localRenames || {};
+              const sessionKey = localRenames[ex] || ex;
+              const entry = sessions[k]?.[sessionKey];
+              return Array.isArray(entry) && entry.length > 0;
+            });
+          }) || [];
 
           return (
             <TouchableOpacity

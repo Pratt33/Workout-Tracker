@@ -17,8 +17,15 @@ import { useFocusEffect } from '@react-navigation/native';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { useTheme } from '../app/theme';
 import AppLogo from '../app/AppLogo';
+import CardioLogger from './CardioLogger';
 import SettingsModal from './SettingsModal';
-import { PLAN as DEFAULT_PLAN, isCardioExercise, isWeightExercise, cardioHasDistance } from '../app/data';
+import {
+  PLAN as DEFAULT_PLAN,
+  DEFAULT_CARDIO_CONFIG,
+  applyCardioConfigToPlan,
+  isCardioExercise,
+  isWeightExercise,
+} from '../app/data';
 import {
   loadSessions,
   saveSessions,
@@ -28,6 +35,7 @@ import {
   loadCustomPlan,
   loadRestDays,
   loadDayOverrides,
+  loadCardioConfig,
 } from '../app/storage';
 
 const EMPTY_SETS = () => [
@@ -125,6 +133,8 @@ export default function TodayScreen() {
   const [activeSets, setActiveSets] = useState([]);
   const [cardioMinutes, setCardioMinutes] = useState('');
   const [cardioKm, setCardioKm] = useState('');
+  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
+  const [cardioSteps, setCardioSteps] = useState('');
   const [weightKg, setWeightKg] = useState('');
   const [prefillDate, setPrefillDate] = useState(null);
   const [editingEx, setEditingEx] = useState(null);
@@ -144,6 +154,8 @@ export default function TodayScreen() {
 
   const loadScreenData = useCallback(async () => {
     const loadedSessions = await loadSessions();
+    const savedCardioConfig = await loadCardioConfig();
+    setCardioConfig(savedCardioConfig || DEFAULT_CARDIO_CONFIG);
     const customPlan = await loadCustomPlan();
     const restDays = await loadRestDays();
     const overrides = await loadDayOverrides();
@@ -155,7 +167,8 @@ export default function TodayScreen() {
     const nextPlan = customPlan && typeof customPlan === 'object' ? customPlan : DEFAULT_PLAN;
     const restStatus = !!restDays[tk];
     setSessions({ ...loadedSessions });
-    setPlan(nextPlan);
+    const liveConfig = savedCardioConfig || DEFAULT_CARDIO_CONFIG;
+    setPlan(applyCardioConfigToPlan(nextPlan, liveConfig));
     setIsRestDay(restStatus || !nextPlan[effectiveDowLocal]);
     setShowRestBanner(restStatus || !nextPlan[effectiveDowLocal]);
   }, [dow, tk]);
@@ -177,10 +190,11 @@ export default function TodayScreen() {
     const current = sessions[tk]?.[ex];
     setActiveEx(ex);
     
-    if (isCardioExercise(ex)) {
+    if (isCardioExercise(ex, cardioConfig)) {
       setActiveSets([]);
       setCardioMinutes(current && typeof current === 'object' ? String(current.minutes ?? '') : '');
       setCardioKm(current && typeof current === 'object' ? String(current.km ?? '') : '');
+      setCardioSteps(current && typeof current === 'object' ? String(current.steps ?? '') : '');
       setWeightKg('');
     } else if (isWeightExercise(ex)) {
       setActiveSets([]);
@@ -216,6 +230,7 @@ export default function TodayScreen() {
     setActiveSets([]);
     setCardioMinutes('');
     setCardioKm('');
+    setCardioSteps('');
     setWeightKg('');
     setPrefillDate(null);
   };
@@ -228,11 +243,11 @@ export default function TodayScreen() {
     if (!activeEx || !day) return;
     const nextSessions = { ...sessions };
     nextSessions[tk] = { ...(nextSessions[tk] || {}), _dow: effectiveDow };
-    nextSessions[tk][activeEx] = isCardioExercise(activeEx)
-      ? { minutes: cardioMinutes, km: cardioKm }
+    nextSessions[tk][activeEx] = isCardioExercise(activeEx, cardioConfig)
+      ? { minutes: cardioMinutes, km: cardioKm, steps: cardioSteps }
       : isWeightExercise(activeEx)
         ? { kg: weightKg }
-      : activeSets;
+        : activeSets;
 
     await saveSessions(nextSessions);
     setSessions(nextSessions);
@@ -285,14 +300,14 @@ export default function TodayScreen() {
     cancelEditingExercise();
   };
 
-  const activeIsCardio = activeEx ? isCardioExercise(activeEx) : false;
+  const activeIsCardio = activeEx ? isCardioExercise(activeEx, cardioConfig) : false;
   const activeIsWeight = activeEx ? isWeightExercise(activeEx) : false;
   const totalVol = activeIsCardio ? 0 : activeSets.reduce((sum, set) => sum + (parseFloat(set.w) || 0) * (parseInt(set.r) || 0), 0);
   const showRestView = isRestDay || !day;
 
   const isExerciseDone = ex => {
     const entry = sessions[tk]?.[ex];
-    if (isCardioExercise(ex) || isWeightExercise(ex)) return !!entry;
+    if (isCardioExercise(ex, cardioConfig) || isWeightExercise(ex)) return !!entry;
     return Array.isArray(entry) && entry.length > 0;
   };
 
@@ -362,7 +377,13 @@ export default function TodayScreen() {
               </TouchableOpacity>
               <Text style={[s.loggerTitle, { color: t.text }]} numberOfLines={1}>{activeEx}</Text>
             </View>
-            <Text style={[s.loggerSub, { color: t.textSub }]}>Track each set with clean form and controlled tempo</Text>
+            <Text style={[s.loggerSub, { color: t.textSub }]}>
+              {activeIsCardio
+                ? 'Log your cardio session'
+                : activeIsWeight
+                  ? 'Log your body weight for today'
+                  : 'Track each set with clean form and controlled tempo'}
+            </Text>
             {!!prefillDate && (
               <View style={[s.prefillBadge, { borderColor: t.border, backgroundColor: t.inputBg }]}> 
                 <Ionicons name="sparkles-outline" size={12} color={t.accent} />
@@ -372,52 +393,18 @@ export default function TodayScreen() {
           </View>
           <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
             <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
-              {activeIsCardio ? (
-                <>
-                  <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
-                    <Text style={[s.setColHdr, { flex: 1.2, color: t.textHint }]}>Exercise</Text>
-                    <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Minutes</Text>
-                    {cardioHasDistance(activeEx) && (
-                      <Text style={[s.setColHdr, { flex: 1, textAlign: 'center', color: t.textHint }]}>Km</Text>
-                    )}
-                  </View>
-                  <View style={[s.setRow, { borderTopColor: t.border }]}> 
-                    <Text style={[s.setLabel, { color: t.textSub }, { flex: 1.2 }]}>{activeEx}</Text>
-                    <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                      <TextInput
-                        style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                        value={cardioMinutes}
-                        onChangeText={setCardioMinutes}
-                        placeholder="min"
-                        placeholderTextColor={t.textHint}
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
-                    {cardioHasDistance(activeEx) && (
-                      <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                        <TextInput
-                          style={[s.numInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
-                          value={cardioKm}
-                          onChangeText={setCardioKm}
-                          placeholder="km"
-                          placeholderTextColor={t.textHint}
-                          keyboardType="decimal-pad"
-                        />
-                      </View>
-                    )}
-                  </View>
-                  <View style={[s.totalRow, { borderTopColor: t.border }]}> 
-                    <Text style={[s.totalLabel, { color: t.textSub }]}> 
-                      {cardioHasDistance(activeEx) ? 'Distance' : 'Duration'}
-                    </Text>
-                    <Text style={[s.totalVal, { color: t.text }]}> 
-                      {cardioHasDistance(activeEx)
-                        ? `${cardioKm || '0'} km`
-                        : `${cardioMinutes || '0'} min`}
-                    </Text>
-                  </View>
-                </>
-              ) : activeIsWeight ? (
+              {activeIsCardio && (
+                <CardioLogger
+                  exerciseName={activeEx}
+                  cardioConfig={cardioConfig}
+                  minutes={cardioMinutes} onMinutesChange={setCardioMinutes}
+                  km={cardioKm} onKmChange={setCardioKm}
+                  steps={cardioSteps} onStepsChange={setCardioSteps}
+                  theme={t}
+                  styles={s}
+                />
+              )}
+              {!activeIsCardio && activeIsWeight ? (
                 <>
                   <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
                     <Text style={[s.setColHdr, { flex: 1, color: t.textHint }]}>Today's weight</Text>
@@ -433,7 +420,7 @@ export default function TodayScreen() {
                     />
                   </View>
                 </>
-              ) : (
+              ) : !activeIsCardio ? (
                 <>
                   <View style={[s.setHeader, { borderBottomColor: t.border, backgroundColor: t.inputBg }]}> 
                     <Text style={[s.setColHdr, { flex: 1.4, color: t.textHint }]}>Set</Text>
@@ -475,7 +462,7 @@ export default function TodayScreen() {
                     <Text style={[s.totalVal, { color: t.text }]}>{`${Math.round(totalVol).toLocaleString()} kg`}</Text>
                   </View>
                 </>
-              )}
+              ) : null}
             </View>
             <View style={s.deadNote}>
               {!activeIsCardio && !activeIsWeight && <Text style={[s.deadNoteText, { color: t.textHint }]}>{'Set 3 -> Drop 1 -> Drop 2 are dead sets - no rest between them'}</Text>}
@@ -576,7 +563,7 @@ export default function TodayScreen() {
             );
           })}
       </ScrollView>
-      <SettingsModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} theme={t} />
+      <SettingsModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} onChanged={loadScreenData} theme={t} />
     </SafeAreaView>
   );
 }

@@ -7,8 +7,23 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
 import AppLogo from '../app/AppLogo';
-import { PLAN, MUSCLE_COLORS, MUSCLES, cardioHasDistance } from '../app/data';
-import { loadSessions, formatDate, getMuscleVolume, getFilteredKeys, loadWorkoutPlan } from '../app/storage';
+import {
+  PLAN,
+  MUSCLE_COLORS,
+  MUSCLES,
+  DEFAULT_CARDIO_CONFIG,
+  applyCardioConfigToPlan,
+  cardioMetric,
+  cardioHasDistance,
+} from '../app/data';
+import {
+  loadSessions,
+  formatDate,
+  getMuscleVolume,
+  getFilteredKeys,
+  loadWorkoutPlan,
+  loadCardioConfig,
+} from '../app/storage';
 import { useTheme } from '../app/theme';
 
 const W = Dimensions.get('window').width - 48;
@@ -18,18 +33,30 @@ const FILTERS = [
   { key: 'all', label: 'All time' },
 ];
 
-const CARDIO_EXERCISES = ['Treadmill', 'Cycling', 'Plank'];
-
-function getCardioChartValue(entry, exerciseName) {
+function getCardioChartValue(entry, exerciseName, config) {
   if (!entry || typeof entry !== 'object') return null;
-  if (cardioHasDistance(exerciseName)) {
-    const minutes = parseFloat(entry.minutes ?? entry.m) || 0;
+  const metric = cardioMetric(exerciseName, config);
+  if (metric === 'steps+km') {
+    const steps = parseInt(entry.steps) || 0;
+    const km = parseFloat(entry.km) || 0;
+    if (steps === 0 || km === 0) return null;
+    // Steps per km — lower is better, invert for chart: km per 1000 steps * 10
+    return Math.round((km / steps) * 10000) / 10;
+  } else if (metric === 'minutes+km') {
+    const minutes = parseFloat(entry.minutes) || 0;
     const km = parseFloat(entry.km) || 0;
     if (minutes === 0 || km === 0) return null;
-    return Math.round((km / minutes) * 60 * 100) / 100;
+    return Math.round((km / minutes) * 60 * 10) / 10;
+  } else {
+    const minutes = parseFloat(entry.minutes) || 0;
+    return minutes > 0 ? minutes : null;
   }
-  const minutes = parseFloat(entry.minutes ?? entry.m) || 0;
-  return minutes > 0 ? minutes : null;
+}
+
+function getCardioChartSubtitle(metric) {
+  if (metric === 'steps+km') return 'Efficiency (km/1000 steps) — higher is better';
+  if (metric === 'minutes+km') return 'Speed (km/h) — higher is better';
+  return 'Duration (min) — higher is better';
 }
 
 export default function ProgressScreen() {
@@ -38,13 +65,19 @@ export default function ProgressScreen() {
   const [planMap, setPlanMap] = useState(PLAN);
   const [filter, setFilter] = useState('all');
   const [selectedMuscle, setSelectedMuscle] = useState('Chest');
-  const [selectedCardioExercise, setSelectedCardioExercise] = useState('Treadmill');
+  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
+  const [selectedCardioExercise, setSelectedCardioExercise] = useState(DEFAULT_CARDIO_CONFIG[0]?.name || '');
 
   useFocusEffect(useCallback(() => {
-    Promise.all([loadSessions(), loadWorkoutPlan()]).then(([s, savedPlan]) => {
+    Promise.all([loadSessions(), loadWorkoutPlan(), loadCardioConfig()]).then(([s, savedPlan, savedCardio]) => {
+      const config = savedCardio || DEFAULT_CARDIO_CONFIG;
       setSessions(s);
-      if (savedPlan && typeof savedPlan === 'object') setPlanMap(savedPlan);
-      else setPlanMap(PLAN);
+      setCardioConfig(config);
+      const liveConfig = savedCardio || DEFAULT_CARDIO_CONFIG;
+      setPlanMap(applyCardioConfigToPlan(savedPlan || PLAN, liveConfig));
+      setSelectedCardioExercise(prev => (
+        config.some(c => c.name === prev) ? prev : (config[0]?.name || '')
+      ));
     });
   }, []));
 
@@ -96,19 +129,20 @@ export default function ProgressScreen() {
     const pts = [];
     filteredKeys.forEach(k => {
       const entry = sessions[k]?.[selectedCardioExercise];
-      const value = getCardioChartValue(entry, selectedCardioExercise);
+      const value = getCardioChartValue(entry, selectedCardioExercise, cardioConfig);
       if (value !== null) pts.push({ key: k, value });
     });
     if (pts.length < 2) return null;
-    const isDistance = cardioHasDistance(selectedCardioExercise);
+    const metric = cardioMetric(selectedCardioExercise, cardioConfig);
     return {
       labels: pts.map(p => formatDate(p.key)),
       datasets: [{ data: pts.map(p => p.value), color: () => '#F35D8A', strokeWidth: 2.5 }],
-      _isDistanceCardio: isDistance,
+      _metric: metric,
     };
   };
 
   const cardioData = getCardioData();
+  const selectedCardioMetric = cardioMetric(selectedCardioExercise, cardioConfig);
 
   const makeChartConfig = (lineColor) => ({
     backgroundGradientFrom: t.surface,
@@ -123,7 +157,8 @@ export default function ProgressScreen() {
     propsForBackgroundLines: { stroke: t.border, strokeWidth: 0.5 },
   });
 
-  const cardioIsDistance = !!cardioData?._isDistanceCardio;
+  const cardioIsDistance = selectedCardioMetric === 'minutes+km';
+  const cardioIsSteps = selectedCardioMetric === 'steps+km';
 
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
@@ -227,12 +262,13 @@ export default function ProgressScreen() {
 
         <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
           <Text style={[s.cardTitle, { color: t.text }]}>{selectedCardioExercise} progress</Text>
-          <Text style={[s.cardSub, { color: t.textSub }]}> 
-            {cardioIsDistance ? 'Speed (km/h) — higher is better' : 'Duration (min) — higher is better'}
+          <Text style={[s.cardSub, { color: t.textSub }]}>
+            {getCardioChartSubtitle(selectedCardioMetric)}
           </Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
             <View style={s.chipRow}>
-              {CARDIO_EXERCISES.map(exercise => {
+              {cardioConfig.map(c => {
+                const exercise = c.name;
                 const active = selectedCardioExercise === exercise;
                 return (
                   <TouchableOpacity
@@ -258,8 +294,8 @@ export default function ProgressScreen() {
                 height={170}
                 chartConfig={{
                   ...makeChartConfig('#F35D8A'),
-                  decimalPlaces: cardioIsDistance ? 1 : 0,
-                  yAxisSuffix: cardioIsDistance ? ' km/h' : ' min',
+                  decimalPlaces: selectedCardioMetric === 'minutes' ? 0 : 1,
+                  yAxisSuffix: cardioIsSteps ? ' km/1k' : cardioIsDistance ? ' km/h' : ' min',
                 }}
                 bezier
                 style={{ borderRadius: 8 }}

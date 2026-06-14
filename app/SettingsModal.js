@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Modal, View, Text, TouchableOpacity, ScrollView,
-  StyleSheet, TextInput, Switch, Platform
+  StyleSheet, TextInput, Switch, Platform, Alert
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { PLAN } from './data';
-import { todayKey, loadDayOverrides, saveDayOverride } from './storage';
+import { PLAN, DEFAULT_CARDIO_CONFIG } from './data';
+import { todayKey, loadDayOverrides, saveDayOverride, loadCardioConfig, saveCardioConfig, resetCardioConfig, loadSessions, saveSessions, renameExerciseInSessions, saveRestDay } from './storage';
 
 const REST_KEY = 'rest_days_v1';
 const CUSTOM_KEY = 'custom_exercises_v1';
@@ -20,6 +20,19 @@ const DAY_OPTIONS = [
 ];
 
 const DAY_ORDER = [1, 2, 3, 4, 5, 6];
+
+const METRIC_OPTIONS = [
+  { value: 'steps+km', label: 'Steps+Km' },
+  { value: 'minutes+km', label: 'Min+Km' },
+  { value: 'minutes', label: 'Min only' },
+];
+
+function metricLabel(metric) {
+  if (metric === 'steps+km') return 'Steps + Km';
+  if (metric === 'minutes+km') return 'Minutes + Km';
+  if (metric === 'minutes') return 'Minutes only';
+  return metric;
+}
 
 function clonePlan(plan) {
   return JSON.parse(JSON.stringify(plan));
@@ -66,6 +79,9 @@ export default function SettingsModal({ visible, onClose, onChanged, theme: t })
   const [expandedDays, setExpandedDays] = useState({});
   const [plan, setPlan] = useState(clonePlan(PLAN));
   const [dayOverride, setDayOverride] = useState(null);
+  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
+  const [editingCardio, setEditingCardio] = useState(false);
+  const [cardioEdits, setCardioEdits] = useState([]);
 
   const dayEntries = useMemo(
     () => DAY_ORDER.map(dayNum => ({ dayNum, day: plan[dayNum] })),
@@ -76,11 +92,14 @@ export default function SettingsModal({ visible, onClose, onChanged, theme: t })
     if (!visible) return;
 
     let active = true;
-    Promise.all([loadRestDays(), loadCustomExercises(), loadDayOverrides()]).then(([restDays, customPlan, overrides]) => {
+    Promise.all([loadRestDays(), loadCustomExercises(), loadDayOverrides(), loadCardioConfig()]).then(([restDays, customPlan, overrides, savedCardio]) => {
       if (!active) return;
       setTodayRest(!!restDays[todayKey()]?.isRest);
       setDayOverride(overrides[todayKey()] ?? null);
       setPlan(customPlan && typeof customPlan === 'object' ? customPlan : clonePlan(PLAN));
+      setCardioConfig(savedCardio || DEFAULT_CARDIO_CONFIG);
+      setEditingCardio(false);
+      setCardioEdits([]);
     });
 
     return () => {
@@ -95,11 +114,7 @@ export default function SettingsModal({ visible, onClose, onChanged, theme: t })
 
   const toggleTodayRest = async (value) => {
     setTodayRest(value);
-    const restDays = await loadRestDays();
-    const key = todayKey();
-    if (value) restDays[key] = { date: key, isRest: true };
-    else delete restDays[key];
-    await saveRestDays(restDays);
+    await saveRestDay(todayKey(), value);
   };
 
   const selectDayOverride = async (dow) => {
@@ -131,6 +146,94 @@ export default function SettingsModal({ visible, onClose, onChanged, theme: t })
   const resetToDefaults = async () => {
     await clearCustomExercises();
     setPlan(clonePlan(PLAN));
+  };
+
+  const startEditingCardio = () => {
+    setCardioEdits(JSON.parse(JSON.stringify(cardioConfig)));
+    setEditingCardio(true);
+  };
+
+  const updateCardioEdit = (index, field, value) => {
+    setCardioEdits(prev => prev.map((item, i) => {
+      if (i !== index) return item;
+      const next = { ...item, [field]: value };
+      if (field === 'metric' && value !== 'steps+km') {
+        delete next.stepGoal;
+      }
+      if (field === 'metric' && value === 'steps+km' && !next.stepGoal) {
+        next.stepGoal = 10000;
+      }
+      return next;
+    }));
+  };
+
+  const addCardioExercise = () => {
+    setCardioEdits(prev => [...prev, { name: '', metric: 'minutes' }]);
+  };
+
+  const removeCardioExercise = (index) => {
+    setCardioEdits(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const saveCardioEdits = async () => {
+    const names = cardioEdits.map(c => c.name.trim()).filter(Boolean);
+    if (names.length === 0) {
+      Alert.alert('Invalid config', 'You must have at least one cardio exercise.');
+      return;
+    }
+    const hasDuplicates = names.length !== new Set(names).size;
+    if (hasDuplicates) {
+      Alert.alert('Duplicate names', 'Each cardio exercise must have a unique name.');
+      return;
+    }
+    const hasEmpty = cardioEdits.some(c => !c.name.trim());
+    if (hasEmpty) {
+      Alert.alert('Empty name', 'All cardio exercises must have a name.');
+      return;
+    }
+    const nextConfig = cardioEdits
+      .map(entry => {
+        const trimmed = {
+          name: entry.name.trim(),
+          metric: entry.metric,
+        };
+        if (entry.metric === 'steps+km') {
+          trimmed.stepGoal = parseInt(entry.stepGoal, 10) || 10000;
+        }
+        return trimmed;
+      })
+      .filter(entry => entry.name);
+
+    const oldNames = cardioConfig.map(c => c.name);
+    const newNames = cardioEdits.map(c => c.name.trim());
+
+    let migratedSessions = null;
+    for (let i = 0; i < Math.min(oldNames.length, newNames.length); i++) {
+      if (oldNames[i] !== newNames[i] && oldNames[i] && newNames[i]) {
+        if (!migratedSessions) {
+          migratedSessions = await loadSessions();
+        }
+        const result = renameExerciseInSessions(migratedSessions, oldNames[i], newNames[i]);
+        if (result.changed) migratedSessions = result.sessions;
+      }
+    }
+    if (migratedSessions) {
+      await saveSessions(migratedSessions);
+    }
+
+    await saveCardioConfig(nextConfig);
+    setCardioConfig(nextConfig);
+    setEditingCardio(false);
+    setCardioEdits([]);
+    if (onChanged) await onChanged();
+  };
+
+  const resetCardioToDefaults = async () => {
+    await resetCardioConfig();
+    setCardioConfig(DEFAULT_CARDIO_CONFIG);
+    setEditingCardio(false);
+    setCardioEdits([]);
+    if (onChanged) await onChanged();
   };
 
   return (
@@ -192,6 +295,116 @@ export default function SettingsModal({ visible, onClose, onChanged, theme: t })
               <TouchableOpacity style={[s.clearOverrideBtn, { borderColor: t.border, backgroundColor: t.inputBg }]} onPress={clearDayOverride}>
                 <Text style={[s.resetText, { color: t.textSub }]}>Clear override</Text>
               </TouchableOpacity>
+            </View>
+
+            <View style={[s.section, { borderColor: t.border, backgroundColor: t.surface }]}>
+              <View style={s.sectionHeaderRow}>
+                <Text style={[s.sectionTitle, s.sectionTitleInline, { color: t.text }]}>Cardio Exercises</Text>
+                {!editingCardio && (
+                  <TouchableOpacity
+                    style={[s.editLinkBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
+                    onPress={startEditingCardio}
+                  >
+                    <Text style={[s.editLinkText, { color: t.accent }]}>Edit</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {!editingCardio ? (
+                <>
+                  {cardioConfig.map((entry, index) => (
+                    <View key={`${entry.name}-${index}`} style={[s.cardioListRow, { borderTopColor: t.border }]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[s.cardioListName, { color: t.text }]}>{entry.name}</Text>
+                        <Text style={[s.cardioListSub, { color: t.textSub }]}>{metricLabel(entry.metric)}</Text>
+                      </View>
+                    </View>
+                  ))}
+                  <TouchableOpacity
+                    style={[s.resetBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
+                    onPress={resetCardioToDefaults}
+                  >
+                    <Text style={[s.resetText, { color: t.textSub }]}>Reset to defaults</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  {cardioEdits.map((entry, index) => (
+                    <View key={index} style={[s.cardioEditRow, { borderTopColor: t.border }]}>
+                      <View style={s.cardioEditTopRow}>
+                        <TextInput
+                          style={[s.cardioNameInput, { backgroundColor: t.inputBg, borderColor: t.border, color: t.text }]}
+                          value={entry.name}
+                          onChangeText={value => updateCardioEdit(index, 'name', value)}
+                          placeholder="Exercise name"
+                          placeholderTextColor={t.textHint}
+                        />
+                        <TouchableOpacity
+                          style={[s.cardioDeleteBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
+                          onPress={() => removeCardioExercise(index)}
+                        >
+                          <Ionicons name="trash-outline" size={16} color={t.deadColor} />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={s.metricChipRow}>
+                        {METRIC_OPTIONS.map(option => {
+                          const selected = entry.metric === option.value;
+                          return (
+                            <TouchableOpacity
+                              key={option.value}
+                              style={[
+                                s.metricChip,
+                                { borderColor: t.border, backgroundColor: t.inputBg },
+                                selected && { borderColor: t.accent, backgroundColor: t.accent },
+                              ]}
+                              onPress={() => updateCardioEdit(index, 'metric', option.value)}
+                            >
+                              <Text style={[s.metricChipText, { color: selected ? '#fff' : t.textSub }]}>
+                                {option.label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                      {entry.metric === 'steps+km' && (
+                        <View style={[s.stepGoalRow, { borderColor: t.border, backgroundColor: t.inputBg }]}>
+                          <Text style={[s.stepGoalLabel, { color: t.textSub }]}>Step goal</Text>
+                          <TextInput
+                            style={[s.stepGoalInput, { backgroundColor: t.surface, borderColor: t.border, color: t.text }]}
+                            value={entry.stepGoal != null ? String(entry.stepGoal) : ''}
+                            onChangeText={value => updateCardioEdit(index, 'stepGoal', value)}
+                            placeholder="10000"
+                            placeholderTextColor={t.textHint}
+                            keyboardType="number-pad"
+                          />
+                        </View>
+                      )}
+                    </View>
+                  ))}
+
+                  <TouchableOpacity
+                    style={[s.addCardioBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
+                    onPress={addCardioExercise}
+                  >
+                    <Ionicons name="add" size={16} color={t.accent} />
+                    <Text style={[s.addCardioText, { color: t.accent }]}>Add exercise</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[s.saveCardioBtn, { backgroundColor: t.accent }]}
+                    onPress={saveCardioEdits}
+                  >
+                    <Text style={[s.saveCardioText, { color: t.accentText }]}>Save cardio config</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[s.resetBtn, { borderColor: t.border, backgroundColor: t.inputBg }]}
+                    onPress={resetCardioToDefaults}
+                  >
+                    <Text style={[s.resetText, { color: t.textSub }]}>Reset to defaults</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
 
             <View style={[s.section, { borderColor: t.border, backgroundColor: t.surface }]}> 
@@ -299,6 +512,113 @@ const s = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 10,
   },
+  sectionTitleInline: {
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+  },
+  editLinkBtn: {
+    borderWidth: 0.5,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  editLinkText: { fontSize: 12, fontWeight: '600' },
+  cardioListRow: {
+    borderTopWidth: 0.5,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  cardioListName: { fontSize: 13, fontWeight: '600' },
+  cardioListSub: { fontSize: 11, marginTop: 2 },
+  cardioEditRow: {
+    borderTopWidth: 0.5,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  cardioEditTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardioNameInput: {
+    flex: 1,
+    borderWidth: 0.5,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    fontSize: 13,
+  },
+  cardioDeleteBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 0.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metricChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  metricChip: {
+    borderWidth: 0.5,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  metricChipText: { fontSize: 11, fontWeight: '600' },
+  stepGoalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 0.5,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 10,
+  },
+  stepGoalLabel: { fontSize: 12, fontWeight: '500' },
+  stepGoalInput: {
+    minWidth: 88,
+    borderWidth: 0.5,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  addCardioBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 0.5,
+    borderRadius: 12,
+    marginHorizontal: 14,
+    marginTop: 4,
+    paddingVertical: 11,
+  },
+  addCardioText: { fontSize: 13, fontWeight: '600' },
+  saveCardioBtn: {
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 14,
+    marginTop: 8,
+    paddingVertical: 12,
+  },
+  saveCardioText: { fontSize: 13, fontWeight: '700' },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

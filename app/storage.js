@@ -4,12 +4,13 @@ const KEY = 'workout_sessions_v1';
 const PLAN_KEY = 'workout_plan_v1';
 
 const LEGACY_EXERCISE_RENAMES = [
-  { from: 'Machine Walking', to: 'Treadmill' },
-  { from: 'Incline Power Walk', to: 'Treadmill' },
+  { from: 'Machine Walking', to: 'Walking' },
+  { from: 'Incline Power Walk', to: 'Walking' },
   { from: 'Cycling Machine', to: 'Cycling' },
   { from: 'Upright Bike', to: 'Cycling' },
   { from: 'Steady-State Cycling', to: 'Cycling' },
   { from: 'Plank Hold', to: 'Plank' },
+  { from: 'Treadmill', to: 'Walking' },
 ];
 
 function migrateLegacyExerciseNames(sessions) {
@@ -400,7 +401,7 @@ export async function loadDayOverrides() {
 
 export function buildCSVExport(sessions, planMap) {
   const rows = [];
-  rows.push(['Date', 'Day', 'Muscle Group', 'Exercise', 'Set', 'Weight (kg)', 'Reps', 'Volume (kg)', 'Minutes', 'Km', 'Body Weight (kg)'].join(','));
+  rows.push(['Date', 'Day', 'Muscle Group', 'Exercise', 'Set', 'Weight (kg)', 'Reps', 'Volume (kg)', 'Minutes', 'Km', 'Steps', 'Body Weight (kg)'].join(','));
 
   const sessionKeys = Object.keys(sessions || {})
     .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
@@ -423,10 +424,11 @@ export function buildCSVExport(sessions, planMap) {
         if (g.name === 'Cardio' && typeof entry === 'object' && !Array.isArray(entry)) {
           const mins = entry.minutes ?? entry.m ?? '';
           const km = entry.km ?? '';
-          rows.push([dateLabel, dayLabel, 'Cardio', `"${ex}"`, '', '', '', '', mins, km, ''].join(','));
+          const steps = entry.steps ?? '';
+          rows.push([dateLabel, dayLabel, 'Cardio', `"${ex}"`, '', '', '', '', mins, km, steps, ''].join(','));
         } else if (g.name === 'Weight' && typeof entry === 'object' && !Array.isArray(entry)) {
           const kg = entry.kg ?? '';
-          rows.push([dateLabel, dayLabel, 'Weight', `"${ex}"`, '', '', '', '', '', '', kg].join(','));
+          rows.push([dateLabel, dayLabel, 'Weight', `"${ex}"`, '', '', '', '', '', '', '', kg].join(','));
         } else if (Array.isArray(entry)) {
           entry.forEach((set, i) => {
             const w = parseFloat(set.w) || 0;
@@ -442,7 +444,7 @@ export function buildCSVExport(sessions, planMap) {
               w || '',
               r || '',
               vol > 0 ? Math.round(vol) : '',
-              '', '', ''
+              '', '', '', ''
             ].join(','));
           });
         }
@@ -451,4 +453,27 @@ export function buildCSVExport(sessions, planMap) {
   });
 
   return rows.join('\n');
+}
+
+const CARDIO_CONFIG_KEY = 'cardio_config_v1';
+
+export async function loadCardioConfig() {
+  try {
+    const raw = await AsyncStorage.getItem(CARDIO_CONFIG_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch { return null; }
+}
+
+export async function saveCardioConfig(config) {
+  try {
+    await AsyncStorage.setItem(CARDIO_CONFIG_KEY, JSON.stringify(config));
+  } catch {}
+}
+
+export async function resetCardioConfig() {
+  try {
+    await AsyncStorage.removeItem(CARDIO_CONFIG_KEY);
+  } catch {}
 }
