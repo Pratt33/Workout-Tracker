@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, Dimensions
+  StyleSheet, useWindowDimensions
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -26,7 +26,7 @@ import {
 } from '../app/storage';
 import { useTheme } from '../app/theme';
 
-const W = Dimensions.get('window').width - 48;
+
 const FILTERS = [
   { key: '4w', label: '4 weeks' },
   { key: '3m', label: '3 months' },
@@ -61,6 +61,8 @@ function getCardioChartSubtitle(metric) {
 
 export default function ProgressScreen() {
   const t = useTheme();
+  const { width } = useWindowDimensions();
+  const W = width - 48;
   const [sessions, setSessions] = useState({});
   const [planMap, setPlanMap] = useState(PLAN);
   const [filter, setFilter] = useState('all');

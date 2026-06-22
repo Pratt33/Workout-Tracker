@@ -1,25 +1,26 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { PLAN_VERSION } from "./data";
 
-const KEY = 'workout_sessions_v1';
-const PLAN_KEY = 'workout_plan_v1';
+const KEY = "workout_sessions_v1";
+const PLAN_KEY = "workout_plan_v1";
 
 const LEGACY_EXERCISE_RENAMES = [
-  { from: 'Machine Walking', to: 'Walking' },
-  { from: 'Incline Power Walk', to: 'Walking' },
-  { from: 'Cycling Machine', to: 'Cycling' },
-  { from: 'Upright Bike', to: 'Cycling' },
-  { from: 'Steady-State Cycling', to: 'Cycling' },
-  { from: 'Plank Hold', to: 'Plank' },
-  { from: 'Treadmill', to: 'Walking' },
+  { from: "Machine Walking", to: "Walking" },
+  { from: "Incline Power Walk", to: "Walking" },
+  { from: "Cycling Machine", to: "Cycling" },
+  { from: "Upright Bike", to: "Cycling" },
+  { from: "Steady-State Cycling", to: "Cycling" },
+  { from: "Plank Hold", to: "Plank" },
+  { from: "Treadmill", to: "Walking" },
 ];
 
 function migrateLegacyExerciseNames(sessions) {
   const next = { ...(sessions || {}) };
   let changed = false;
 
-  Object.keys(next).forEach(k => {
+  Object.keys(next).forEach((k) => {
     const day = next[k];
-    if (!day || typeof day !== 'object' || Array.isArray(day)) return;
+    if (!day || typeof day !== "object" || Array.isArray(day)) return;
 
     LEGACY_EXERCISE_RENAMES.forEach(({ from, to }) => {
       if (!from || !to || from === to) return;
@@ -45,22 +46,23 @@ export async function loadSessions() {
       await AsyncStorage.setItem(KEY, JSON.stringify(sessions));
     }
     return sessions;
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 export async function saveSessions(sessions) {
-  try { await AsyncStorage.setItem(KEY, JSON.stringify(sessions)); } catch {}
+  try {
+    await AsyncStorage.setItem(KEY, JSON.stringify(sessions));
+  } catch {}
 }
 
 export async function loadWorkoutPlan() {
-  try {
-    const raw = await AsyncStorage.getItem(PLAN_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
+  return loadCustomPlan();
 }
 
 export async function saveWorkoutPlan(plan) {
-  try { await AsyncStorage.setItem(PLAN_KEY, JSON.stringify(plan)); } catch {}
+  return saveCustomPlan(plan);
 }
 
 export function renameExerciseInSessions(sessions, oldName, newName) {
@@ -69,9 +71,9 @@ export function renameExerciseInSessions(sessions, oldName, newName) {
   }
   const next = { ...sessions };
   let changed = false;
-  Object.keys(next).forEach(k => {
+  Object.keys(next).forEach((k) => {
     const day = next[k];
-    if (!day || typeof day !== 'object' || Array.isArray(day)) return;
+    if (!day || typeof day !== "object" || Array.isArray(day)) return;
     if (!Object.prototype.hasOwnProperty.call(day, oldName)) return;
     const oldSets = Array.isArray(day[oldName]) ? day[oldName] : [];
     const existing = Array.isArray(day[newName]) ? day[newName] : [];
@@ -87,16 +89,22 @@ export function todayKey() {
 }
 
 export function formatDate(key) {
-  const d = new Date(key + 'T00:00:00');
-  return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+  const d = new Date(key + "T00:00:00");
+  return d.toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 }
 
 export function getSessionVolume(sessionData) {
   if (!sessionData) return 0;
   let vol = 0;
   Object.entries(sessionData).forEach(([k, sets]) => {
-    if (k.startsWith('_') || !Array.isArray(sets)) return;
-    sets.forEach(s => { vol += (parseFloat(s.w) || 0) * (parseInt(s.r) || 0); });
+    if (k.startsWith("_") || !Array.isArray(sets)) return;
+    sets.forEach((s) => {
+      vol += (parseFloat(s.w) || 0) * (parseInt(s.r) || 0);
+    });
   });
   return Math.round(vol);
 }
@@ -104,12 +112,13 @@ export function getSessionVolume(sessionData) {
 export function getMuscleVolume(sessionData, muscleName, dayPlan) {
   if (!sessionData || !dayPlan) return 0;
   let vol = 0;
-  dayPlan.groups.forEach(g => {
+  dayPlan.groups.forEach((g) => {
     if (g.name !== muscleName) return;
-    g.exercises.forEach(ex => {
-      const entry = sessionData[ex];
+    g.exercises.forEach((ex) => {
+      const resolvedKey = resolveExerciseKey(sessionData, ex);
+      const entry = sessionData[resolvedKey];
       if (Array.isArray(entry)) {
-        entry.forEach(s => {
+        entry.forEach((s) => {
           vol += (parseFloat(s.w) || 0) * (parseInt(s.r) || 0);
         });
       }
@@ -121,14 +130,16 @@ export function getMuscleVolume(sessionData, muscleName, dayPlan) {
 export function getCardioMinutes(sessionData, dayPlan) {
   if (!sessionData || !dayPlan) return 0;
   let mins = 0;
-  dayPlan.groups.forEach(g => {
-    if (g.name !== 'Cardio') return;
-    g.exercises.forEach(ex => {
+  dayPlan.groups.forEach((g) => {
+    if (g.name !== "Cardio") return;
+    g.exercises.forEach((ex) => {
       const entry = sessionData[ex];
       if (Array.isArray(entry)) {
-        entry.forEach(s => { mins += (parseFloat(s.m) || 0); });
-      } else if (entry && typeof entry === 'object') {
-        mins += (parseFloat(entry.minutes) || parseFloat(entry.m) || 0);
+        entry.forEach((s) => {
+          mins += parseFloat(s.m) || 0;
+        });
+      } else if (entry && typeof entry === "object") {
+        mins += parseFloat(entry.minutes) || parseFloat(entry.m) || 0;
       }
     });
   });
@@ -136,20 +147,22 @@ export function getCardioMinutes(sessionData, dayPlan) {
 }
 
 export function getFilteredKeys(sessions, filter) {
-  const keys = Object.keys(sessions).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
-  if (filter === 'all') return keys;
+  const keys = Object.keys(sessions)
+    .filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k))
+    .sort();
+  if (filter === "all") return keys;
   const cutoff = new Date();
-  if (filter === '4w') cutoff.setDate(cutoff.getDate() - 28);
-  else if (filter === '3m') cutoff.setMonth(cutoff.getMonth() - 3);
-  return keys.filter(k => new Date(k + 'T00:00:00') >= cutoff);
+  if (filter === "4w") cutoff.setDate(cutoff.getDate() - 28);
+  else if (filter === "3m") cutoff.setMonth(cutoff.getMonth() - 3);
+  return keys.filter((k) => new Date(k + "T00:00:00") >= cutoff);
 }
 
 export function getLatestExerciseSets(sessions, exerciseName, excludeKey) {
-  if (!exerciseName || !sessions || typeof sessions !== 'object') {
+  if (!exerciseName || !sessions || typeof sessions !== "object") {
     return { sets: null, dateKey: null };
   }
   const keys = Object.keys(sessions)
-    .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && k !== excludeKey)
+    .filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && k !== excludeKey)
     .sort()
     .reverse();
 
@@ -167,14 +180,15 @@ export function getLatestExerciseSets(sessions, exerciseName, excludeKey) {
 }
 
 function getWeekKey(dateKey) {
-  const d = new Date(dateKey + 'T00:00:00');
+  const d = new Date(dateKey + "T00:00:00");
   const dayNum = (d.getUTCDay() + 6) % 7;
   d.setUTCDate(d.getUTCDate() - dayNum + 3);
   const firstThursday = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
   const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
   firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
-  const weekNo = 1 + Math.round((d - firstThursday) / (7 * 24 * 60 * 60 * 1000));
-  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+  const weekNo =
+    1 + Math.round((d - firstThursday) / (7 * 24 * 60 * 60 * 1000));
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
 function percentageChange(prev, curr) {
@@ -184,17 +198,19 @@ function percentageChange(prev, curr) {
 }
 
 export function buildLLMExportPayload(sessions, planMap) {
-  const sessionKeys = Object.keys(sessions || {}).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+  const sessionKeys = Object.keys(sessions || {})
+    .filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k))
+    .sort();
   const muscles = [];
-  Object.values(planMap || {}).forEach(day => {
+  Object.values(planMap || {}).forEach((day) => {
     if (!day?.groups) return;
-    day.groups.forEach(g => {
+    day.groups.forEach((g) => {
       if (!muscles.includes(g.name)) muscles.push(g.name);
     });
   });
 
   const byMuscle = {};
-  muscles.forEach(m => {
+  muscles.forEach((m) => {
     byMuscle[m] = {
       total_volume_kg: 0,
       total_sets: 0,
@@ -216,7 +232,7 @@ export function buildLLMExportPayload(sessions, planMap) {
   const prevStart = new Date(now);
   prevStart.setDate(prevStart.getDate() - 56);
 
-  sessionKeys.forEach(k => {
+  sessionKeys.forEach((k) => {
     const session = sessions[k] || {};
     const dow = session._dow;
     const day = planMap?.[dow];
@@ -226,25 +242,28 @@ export function buildLLMExportPayload(sessions, planMap) {
     let sessionSets = 0;
     const touched = new Set();
     const wk = getWeekKey(k);
-    const sessionDate = new Date(k + 'T00:00:00');
+    const sessionDate = new Date(k + "T00:00:00");
 
-    day.groups.forEach(g => {
-      g.exercises.forEach(ex => {
+    day.groups.forEach((g) => {
+      g.exercises.forEach((ex) => {
         const sets = Array.isArray(session[ex]) ? session[ex] : [];
         if (sets.length === 0) return;
         touched.add(g.name);
-        sets.forEach(set => {
+        sets.forEach((set) => {
           const vol = (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
           sessionVolume += vol;
           sessionSets += 1;
-          if (!byWeek[wk]) byWeek[wk] = { total_volume_kg: 0, total_sets: 0, sessions: 0 };
+          if (!byWeek[wk])
+            byWeek[wk] = { total_volume_kg: 0, total_sets: 0, sessions: 0 };
           byWeek[wk].total_volume_kg += vol;
           byWeek[wk].total_sets += 1;
           byMuscle[g.name].total_volume_kg += vol;
           byMuscle[g.name].total_sets += 1;
-          byMuscle[g.name].per_week_volume_kg[wk] = (byMuscle[g.name].per_week_volume_kg[wk] || 0) + vol;
+          byMuscle[g.name].per_week_volume_kg[wk] =
+            (byMuscle[g.name].per_week_volume_kg[wk] || 0) + vol;
 
-          if (sessionDate >= recentStart) byMuscle[g.name].recent_28d_volume_kg += vol;
+          if (sessionDate >= recentStart)
+            byMuscle[g.name].recent_28d_volume_kg += vol;
           else if (sessionDate >= prevStart && sessionDate < recentStart) {
             byMuscle[g.name].previous_28d_volume_kg += vol;
           }
@@ -252,81 +271,94 @@ export function buildLLMExportPayload(sessions, planMap) {
       });
     });
 
-    touched.forEach(m => { byMuscle[m].sessions_touched += 1; });
+    touched.forEach((m) => {
+      byMuscle[m].sessions_touched += 1;
+    });
 
-    if (!byDayOfWeek[dow]) byDayOfWeek[dow] = { sessions: 0, volume_kg: 0, sets: 0 };
+    if (!byDayOfWeek[dow])
+      byDayOfWeek[dow] = { sessions: 0, volume_kg: 0, sets: 0 };
     byDayOfWeek[dow].sessions += 1;
     byDayOfWeek[dow].volume_kg += sessionVolume;
     byDayOfWeek[dow].sets += sessionSets;
 
-    if (!byWeek[wk]) byWeek[wk] = { total_volume_kg: 0, total_sets: 0, sessions: 0 };
+    if (!byWeek[wk])
+      byWeek[wk] = { total_volume_kg: 0, total_sets: 0, sessions: 0 };
     byWeek[wk].sessions += 1;
 
     totalVolume += sessionVolume;
     totalSets += sessionSets;
   });
 
-  muscles.forEach(m => {
+  muscles.forEach((m) => {
     byMuscle[m].total_volume_kg = Math.round(byMuscle[m].total_volume_kg);
-    byMuscle[m].recent_28d_volume_kg = Math.round(byMuscle[m].recent_28d_volume_kg);
-    byMuscle[m].previous_28d_volume_kg = Math.round(byMuscle[m].previous_28d_volume_kg);
-    Object.keys(byMuscle[m].per_week_volume_kg).forEach(w => {
-      byMuscle[m].per_week_volume_kg[w] = Math.round(byMuscle[m].per_week_volume_kg[w]);
+    byMuscle[m].recent_28d_volume_kg = Math.round(
+      byMuscle[m].recent_28d_volume_kg,
+    );
+    byMuscle[m].previous_28d_volume_kg = Math.round(
+      byMuscle[m].previous_28d_volume_kg,
+    );
+    Object.keys(byMuscle[m].per_week_volume_kg).forEach((w) => {
+      byMuscle[m].per_week_volume_kg[w] = Math.round(
+        byMuscle[m].per_week_volume_kg[w],
+      );
     });
     byMuscle[m].trend_28d_vs_prev_28d_pct = percentageChange(
       byMuscle[m].previous_28d_volume_kg,
-      byMuscle[m].recent_28d_volume_kg
+      byMuscle[m].recent_28d_volume_kg,
     );
   });
 
-  Object.keys(byWeek).forEach(w => {
+  Object.keys(byWeek).forEach((w) => {
     byWeek[w].total_volume_kg = Math.round(byWeek[w].total_volume_kg);
   });
 
-  const muscleVolumes = muscles.map(m => byMuscle[m].total_volume_kg);
+  const muscleVolumes = muscles.map((m) => byMuscle[m].total_volume_kg);
   const avgMuscleVolume = muscleVolumes.length
     ? muscleVolumes.reduce((a, b) => a + b, 0) / muscleVolumes.length
     : 0;
 
-  const balance = muscles.map(m => {
-    const ratio = avgMuscleVolume > 0 ? byMuscle[m].total_volume_kg / avgMuscleVolume : 1;
+  const balance = muscles.map((m) => {
+    const ratio =
+      avgMuscleVolume > 0 ? byMuscle[m].total_volume_kg / avgMuscleVolume : 1;
     return {
       muscle: m,
       total_volume_kg: byMuscle[m].total_volume_kg,
       volume_vs_avg_ratio: Math.round(ratio * 100) / 100,
       status:
-        ratio < 0.8 ? 'undertrained' :
-        ratio > 1.2 ? 'overemphasized' :
-        'balanced',
+        ratio < 0.8
+          ? "undertrained"
+          : ratio > 1.2
+            ? "overemphasized"
+            : "balanced",
     };
   });
 
   return {
     metadata: {
-      schema_version: 'llm_export_v1',
+      schema_version: "llm_export_v1",
       generated_at_iso: new Date().toISOString(),
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       units: {
-        weight: 'kg',
-        volume: 'kg_reps',
+        weight: "kg",
+        volume: "kg_reps",
       },
     },
     annotations: {
-      purpose: 'Analyze progression and muscle-group balance over time.',
+      purpose: "Analyze progression and muscle-group balance over time.",
       interpretation_notes: [
-        'total_volume_kg is computed as sum(weight * reps) over all logged sets.',
-        'trend_28d_vs_prev_28d_pct compares recent 28 days against the prior 28 days.',
-        'balance.status is a heuristic based on total volume vs average across all muscles.',
-        'status=undertrained if ratio < 0.8, overemphasized if ratio > 1.2.',
+        "total_volume_kg is computed as sum(weight * reps) over all logged sets.",
+        "trend_28d_vs_prev_28d_pct compares recent 28 days against the prior 28 days.",
+        "balance.status is a heuristic based on total volume vs average across all muscles.",
+        "status=undertrained if ratio < 0.8, overemphasized if ratio > 1.2.",
       ],
       suggested_llm_prompts: [
-        'Identify muscle groups that are undertrained relative to others and suggest weekly volume targets.',
-        'Find whether progression is stalling for any muscle based on 28-day trend and weekly series.',
-        'Recommend a rebalancing plan while preserving my current split structure.',
+        "Identify muscle groups that are undertrained relative to others and suggest weekly volume targets.",
+        "Find whether progression is stalling for any muscle based on 28-day trend and weekly series.",
+        "Recommend a rebalancing plan while preserving my current split structure.",
       ],
       caveats: [
-        'This export reflects logged data only; missed logs look like lower training volume.',
-        'Changing exercise names is migrated in-session data, but historical intent relies on day split mapping.',
+        "This export reflects logged data only; missed logs look like lower training volume.",
+        "Changing exercise names is migrated in-session data, but historical intent relies on day split mapping.",
       ],
     },
     raw: {
@@ -344,118 +376,209 @@ export function buildLLMExportPayload(sessions, planMap) {
       by_week: byWeek,
       balance_summary: balance,
       potential_focus_muscles: balance
-        .filter(b => b.status === 'undertrained')
-        .map(b => b.muscle),
+        .filter((b) => b.status === "undertrained")
+        .map((b) => b.muscle),
     },
   };
 }
 
 export async function loadCustomPlan() {
   try {
-    const raw = await AsyncStorage.getItem('custom_exercises_v1');
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
+    const raw = await AsyncStorage.getItem("custom_exercises_v1");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed._planVersion !== PLAN_VERSION) return null;
+    return parsed.plan || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function saveCustomPlan(plan) {
-  try { await AsyncStorage.setItem('custom_exercises_v1', JSON.stringify(plan)); } catch {}
+  try {
+    await AsyncStorage.setItem(
+      "custom_exercises_v1",
+      JSON.stringify({
+        _planVersion: PLAN_VERSION,
+        plan,
+      }),
+    );
+  } catch {}
 }
 
 export async function clearCustomPlan() {
-  try { await AsyncStorage.removeItem('custom_exercises_v1'); } catch {}
+  try {
+    await AsyncStorage.removeItem("custom_exercises_v1");
+  } catch {}
+}
+
+export function resolveExerciseKey(sessionData, exerciseName) {
+  if (!sessionData) return exerciseName;
+  if (sessionData[exerciseName] !== undefined) return exerciseName;
+  const localRenames = sessionData._localRenames || {};
+  if (localRenames[exerciseName]) return localRenames[exerciseName];
+  const reverseMatch = Object.entries(localRenames).find(
+    ([, renamed]) => renamed === exerciseName,
+  );
+  if (reverseMatch && sessionData[reverseMatch[0]] !== undefined)
+    return reverseMatch[0];
+  return exerciseName;
 }
 
 export async function loadRestDays() {
   try {
-    const raw = await AsyncStorage.getItem('rest_days_v1');
+    const raw = await AsyncStorage.getItem("rest_days_v1");
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 export async function saveRestDay(dateKey, isRest) {
   try {
-    const raw = await AsyncStorage.getItem('rest_days_v1');
+    const raw = await AsyncStorage.getItem("rest_days_v1");
     const days = raw ? JSON.parse(raw) : {};
     if (isRest) days[dateKey] = true;
     else delete days[dateKey];
-    await AsyncStorage.setItem('rest_days_v1', JSON.stringify(days));
+    await AsyncStorage.setItem("rest_days_v1", JSON.stringify(days));
   } catch {}
 }
 
 export async function saveDayOverride(dateKey, overrideDow) {
   try {
-    const raw = await AsyncStorage.getItem('day_overrides_v1');
+    const raw = await AsyncStorage.getItem("day_overrides_v1");
     const overrides = raw ? JSON.parse(raw) : {};
     if (overrideDow === null) delete overrides[dateKey];
     else overrides[dateKey] = overrideDow;
-    await AsyncStorage.setItem('day_overrides_v1', JSON.stringify(overrides));
+    await AsyncStorage.setItem("day_overrides_v1", JSON.stringify(overrides));
   } catch {}
 }
 
 export async function loadDayOverrides() {
   try {
-    const raw = await AsyncStorage.getItem('day_overrides_v1');
+    const raw = await AsyncStorage.getItem("day_overrides_v1");
     return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
+  } catch {
+    return {};
+  }
 }
 
 export function buildCSVExport(sessions, planMap) {
   const rows = [];
-  rows.push(['Date', 'Day', 'Muscle Group', 'Exercise', 'Set', 'Weight (kg)', 'Reps', 'Volume (kg)', 'Minutes', 'Km', 'Steps', 'Body Weight (kg)'].join(','));
+  rows.push(
+    [
+      "Date",
+      "Day",
+      "Muscle Group",
+      "Exercise",
+      "Set",
+      "Weight (kg)",
+      "Reps",
+      "Volume (kg)",
+      "Minutes",
+      "Km",
+      "Steps",
+      "Body Weight (kg)",
+    ].join(","),
+  );
 
   const sessionKeys = Object.keys(sessions || {})
-    .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
+    .filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k))
     .sort();
 
-  sessionKeys.forEach(k => {
+  sessionKeys.forEach((k) => {
     const session = sessions[k] || {};
     const dow = session._dow;
     const day = planMap?.[dow];
     if (!day) return;
 
     const dateLabel = k;
-    const dayLabel = day.label || '';
+    const dayLabel = day.label || "";
 
-    day.groups.forEach(g => {
-      g.exercises.forEach(ex => {
+    day.groups.forEach((g) => {
+      g.exercises.forEach((ex) => {
         const entry = session[ex];
         if (!entry) return;
 
-        if (g.name === 'Cardio' && typeof entry === 'object' && !Array.isArray(entry)) {
-          const mins = entry.minutes ?? entry.m ?? '';
-          const km = entry.km ?? '';
-          const steps = entry.steps ?? '';
-          rows.push([dateLabel, dayLabel, 'Cardio', `"${ex}"`, '', '', '', '', mins, km, steps, ''].join(','));
-        } else if (g.name === 'Weight' && typeof entry === 'object' && !Array.isArray(entry)) {
-          const kg = entry.kg ?? '';
-          rows.push([dateLabel, dayLabel, 'Weight', `"${ex}"`, '', '', '', '', '', '', '', kg].join(','));
+        if (
+          g.name === "Cardio" &&
+          typeof entry === "object" &&
+          !Array.isArray(entry)
+        ) {
+          const mins = entry.minutes ?? entry.m ?? "";
+          const km = entry.km ?? "";
+          const steps = entry.steps ?? "";
+          rows.push(
+            [
+              dateLabel,
+              dayLabel,
+              "Cardio",
+              `"${ex}"`,
+              "",
+              "",
+              "",
+              "",
+              mins,
+              km,
+              steps,
+              "",
+            ].join(","),
+          );
+        } else if (
+          g.name === "Weight" &&
+          typeof entry === "object" &&
+          !Array.isArray(entry)
+        ) {
+          const kg = entry.kg ?? "";
+          rows.push(
+            [
+              dateLabel,
+              dayLabel,
+              "Weight",
+              `"${ex}"`,
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              kg,
+            ].join(","),
+          );
         } else if (Array.isArray(entry)) {
           entry.forEach((set, i) => {
             const w = parseFloat(set.w) || 0;
             const r = parseInt(set.r) || 0;
             const vol = w * r;
             const setLabel = set.label || `Set ${i + 1}`;
-            rows.push([
-              dateLabel,
-              dayLabel,
-              `"${g.name}"`,
-              `"${ex}"`,
-              `"${setLabel}"`,
-              w || '',
-              r || '',
-              vol > 0 ? Math.round(vol) : '',
-              '', '', '', ''
-            ].join(','));
+            rows.push(
+              [
+                dateLabel,
+                dayLabel,
+                `"${g.name}"`,
+                `"${ex}"`,
+                `"${setLabel}"`,
+                w || "",
+                r || "",
+                vol > 0 ? Math.round(vol) : "",
+                "",
+                "",
+                "",
+                "",
+              ].join(","),
+            );
           });
         }
       });
     });
   });
 
-  return rows.join('\n');
+  return rows.join("\n");
 }
 
-const CARDIO_CONFIG_KEY = 'cardio_config_v1';
+const CARDIO_CONFIG_KEY = "cardio_config_v1";
 
 export async function loadCardioConfig() {
   try {
@@ -463,7 +586,9 @@ export async function loadCardioConfig() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 export async function saveCardioConfig(config) {

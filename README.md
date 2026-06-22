@@ -1,4 +1,4 @@
-# Workout Tracker v4.1
+# Workout Tracker v4.2
 
 A practical workout logging app focused on consistency, progression tracking, and LLM-ready insights.
 
@@ -20,13 +20,16 @@ Goals:
 - LLM-ready export with annotations and derived metrics.
 - Rest-day declaration (including missed-day marking).
 
-## Version 4.1 (Release)
+## Version 4.2 (Release)
 
-This release (v4.1) includes the following highlights:
-- Inline cardio logging (minutes & km) and inline body-weight logging.
-- CSV export from History (Export CSV) alongside existing LLM export.
-- UI polish and small accessibility improvements.
-- Prepared for Android EAS build and published as a new Android artifact.
+This release (v4.2) includes the following highlights:
+- Fixed home UI logger back button position and layout flow on mobile.
+- Refactored history screen buttons to a secondary header row to prevent overlapping on mobile viewports.
+- Moved past session logging indicator badge to resolve close button clipping and make it fully clickable.
+- Linked storage and configurations across Today, History, and Progress screens to ensure customized splits load globally.
+- Implemented orientation-responsive chart scaling using dynamic window dimensions.
+- Added keyboard-friendly ScrollView persistence to settings modal and session editor.
+- Secured cardio rename migration in history database against index shifts.
 
 ## Main Challenges Faced
 - Keeping the data model simple but flexible.
@@ -58,8 +61,8 @@ This release (v4.1) includes the following highlights:
 - react-native-safe-area-context
 
 ## App Download Link
-Android v4.1 production build:
-- https://expo.dev/artifacts/eas/5KnH1NOr49eLjHH5uF7QYhMEg-yJD_vlhL57OGccHJE.aab
+Android v4.2 preview build:
+- https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/0e83b3d0-daff-45b8-b470-e593efca5a31
 
 ## Future Improvements
 - Personal best tracking and milestones.
