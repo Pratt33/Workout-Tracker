@@ -4,12 +4,13 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   StyleSheet,
   TextInput,
   Alert,
   Animated,
+  BackHandler,
   Easing,
-  TouchableWithoutFeedback,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -35,15 +36,9 @@ import {
   loadRestDays,
   loadDayOverrides,
   loadCardioConfig,
+  renameExerciseInSessions,
 } from "../app/storage";
-
-const EMPTY_SETS = () => [
-  { label: "Set 1", w: "", r: "10", dead: false },
-  { label: "Set 2", w: "", r: "10", dead: false },
-  { label: "Set 3", w: "", r: "", dead: true },
-  { label: "Drop 1", w: "", r: "", dead: true },
-  { label: "Drop 2", w: "", r: "", dead: true },
-];
+import { createWorkoutSets, normalizeWorkoutSets } from "./workoutSets";
 
 function AnimatedExRow({ ex, isDone, onPress, onEdit, index, t }) {
   const anim = useRef(new Animated.Value(0)).current;
@@ -252,6 +247,28 @@ export default function DayLogger({
     slideAnim,
   ]);
 
+  useFocusEffect(
+    useCallback(() => {
+      const onHardwareBackPress = () => {
+        if (editingEx) {
+          cancelEditingExercise();
+          return true;
+        }
+        if (activeEx) {
+          closeLogger();
+          return true;
+        }
+        return false;
+      };
+
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        onHardwareBackPress,
+      );
+      return () => subscription.remove();
+    }, [activeEx, editingEx]),
+  );
+
   const openLogger = (ex) => {
     const current = sessions[dateKey]?.[ex];
     setActiveEx(ex);
@@ -294,8 +311,8 @@ export default function DayLogger({
       const latestSets =
         Array.isArray(latestResult?.sets) && latestResult.sets.length > 0
           ? latestResult.sets
-          : EMPTY_SETS();
-      setActiveSets(latestSets.map((set) => ({ ...set })));
+          : createWorkoutSets();
+      setActiveSets(normalizeWorkoutSets(latestSets));
       setPrefillDate(latestResult?.dateKey ?? null);
       setCardioMinutes("");
       setCardioKm("");
@@ -342,7 +359,7 @@ export default function DayLogger({
       ? { minutes: cardioMinutes, km: cardioKm, steps: cardioSteps }
       : isWeightExercise(activeEx)
         ? { kg: weightKg }
-        : activeSets;
+        : normalizeWorkoutSets(activeSets);
 
     await saveSessions(nextSessions);
     setSessions(nextSessions);
@@ -384,21 +401,19 @@ export default function DayLogger({
     const nextSessions = { ...sessions };
     if (!nextSessions[dateKey]) nextSessions[dateKey] = { _dow: dow };
 
-    // Move any logged data from old name to new name within today's session only
-    if (nextSessions[dateKey][oldName] !== undefined) {
-      nextSessions[dateKey][trimmed] = nextSessions[dateKey][oldName];
-      delete nextSessions[dateKey][oldName];
-    }
+    const renamedSessions = renameExerciseInSessions(nextSessions, oldName, trimmed);
+    const persistedSessions = renamedSessions.changed ? renamedSessions.sessions : nextSessions;
 
-    // Store local rename map so the home screen displays the new name today
-    const renames = nextSessions[dateKey]._localRenames
-      ? { ...nextSessions[dateKey]._localRenames }
+    const currentSession = persistedSessions[dateKey] || { _dow: effectiveDow };
+    const renames = currentSession._localRenames
+      ? { ...currentSession._localRenames }
       : {};
     renames[oldName] = trimmed;
-    nextSessions[dateKey]._localRenames = renames;
+    currentSession._localRenames = renames;
+    persistedSessions[dateKey] = currentSession;
 
-    await saveSessions(nextSessions);
-    setSessions(nextSessions);
+    await saveSessions(persistedSessions);
+    setSessions(persistedSessions);
     cancelEditingExercise();
   };
 
@@ -722,7 +737,7 @@ export default function DayLogger({
                         <Text
                           style={[
                             s.setLabel,
-                            { color: set.dead ? t.deadColor : t.textSub },
+                            { color: t.textSub },
                             { flex: 1.4 },
                           ]}
                         >
@@ -787,15 +802,6 @@ export default function DayLogger({
                 </>
               ) : null}
             </View>
-            <View style={s.deadNote}>
-              {!activeIsCardio && !activeIsWeight && (
-                <Text style={[s.deadNoteText, { color: t.textHint }]}>
-                  {
-                    "Set 3 -> Drop 1 -> Drop 2 are dead sets - no rest between them"
-                  }
-                </Text>
-              )}
-            </View>
             <Animated.View style={{ transform: [{ scale: saveScaleAnim }] }}>
               <TouchableOpacity
                 style={[s.saveBtn, { backgroundColor: t.accent }]}
@@ -823,66 +829,23 @@ export default function DayLogger({
                 </Text>
               </TouchableOpacity>
             </Animated.View>
-            <View style={{ height: 32 }} />
+
           </ScrollView>
         </Animated.View>
       </SafeAreaView>
     );
   }
 
-  if (!day) {
-    return (
-      <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
-        <View
-          style={[
-            s.topbar,
-            { backgroundColor: t.surface, borderBottomColor: t.border },
-          ]}
-        >
-          <View style={s.topbarRow}>
-            <Text style={[s.topTitle, { color: t.text }]}>Rest day</Text>
-            <View style={s.topBarRight}>
-              <AppLogo theme={t} compact />
-              <TouchableOpacity
-                style={[
-                  s.settingsBtn,
-                  { backgroundColor: t.inputBg, borderColor: t.border },
-                ]}
-                onPress={() => setSettingsVisible(true)}
-              >
-                <GearIcon color={t.textSub} size={18} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-        <ScrollView
-          style={s.scroll}
-          contentContainerStyle={{ paddingBottom: 16 }}
-        >
-          {renderRestBanner()}
-        </ScrollView>
-        <SettingsModal
-          visible={settingsVisible}
-          onClose={() => {
-            setSettingsVisible(false);
-            loadScreenData();
-          }}
-          onChanged={loadScreenData}
-          theme={t}
-        />
-      </SafeAreaView>
-    );
-  }
-
-  const totalDone = day.groups.reduce(
-    (sum, group) =>
-      sum + group.exercises.filter((ex) => isExerciseDone(ex)).length,
-    0,
-  );
-  const totalEx = day.groups.reduce(
-    (sum, group) => sum + group.exercises.length,
-    0,
-  );
+  const totalDone = day
+    ? day.groups.reduce(
+        (sum, group) =>
+          sum + group.exercises.filter((ex) => isExerciseDone(ex)).length,
+        0,
+      )
+    : 0;
+  const totalEx = day
+    ? day.groups.reduce((sum, group) => sum + group.exercises.length, 0)
+    : 0;
 
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
@@ -894,7 +857,9 @@ export default function DayLogger({
       >
         <View style={s.topbarRow}>
           <View style={{ flex: 1 }}>
-            <Text style={[s.topTitle, { color: t.text }]}>{day.label}</Text>
+            <Text style={[s.topTitle, { color: t.text }]}>
+              {day ? day.label : "Rest Day"}
+            </Text>
             <Text style={[s.topSub, { color: t.textSub }]}>
               {headerDateLabel}
               {totalDone > 0 ? `  ·  ${totalDone}/${totalEx} done` : ""}
@@ -1198,8 +1163,6 @@ const s = StyleSheet.create({
     alignItems: "center",
   },
   weightInput: { width: "72%", maxWidth: 280 },
-  deadNote: { padding: 10, alignItems: "center" },
-  deadNoteText: { fontSize: 11, textAlign: "center", lineHeight: 16 },
   saveBtn: {
     borderRadius: 14,
     marginHorizontal: 12,

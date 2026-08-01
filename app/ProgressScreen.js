@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, useWindowDimensions
@@ -10,11 +10,10 @@ import AppLogo from '../app/AppLogo';
 import {
   PLAN,
   MUSCLE_COLORS,
-  MUSCLES,
   DEFAULT_CARDIO_CONFIG,
   applyCardioConfigToPlan,
+  isWeightExercise,
   cardioMetric,
-  cardioHasDistance,
 } from '../app/data';
 import {
   loadSessions,
@@ -38,10 +37,7 @@ function getCardioChartValue(entry, exerciseName, config) {
   const metric = cardioMetric(exerciseName, config);
   if (metric === 'steps+km') {
     const steps = parseInt(entry.steps) || 0;
-    const km = parseFloat(entry.km) || 0;
-    if (steps === 0 || km === 0) return null;
-    // Steps per km — lower is better, invert for chart: km per 1000 steps * 10
-    return Math.round((km / steps) * 10000) / 10;
+    return steps > 0 ? steps : null;
   } else if (metric === 'minutes+km') {
     const minutes = parseFloat(entry.minutes) || 0;
     const km = parseFloat(entry.km) || 0;
@@ -54,9 +50,52 @@ function getCardioChartValue(entry, exerciseName, config) {
 }
 
 function getCardioChartSubtitle(metric) {
-  if (metric === 'steps+km') return 'Efficiency (km/1000 steps) — higher is better';
+  if (metric === 'steps+km') return 'Steps — higher is better';
   if (metric === 'minutes+km') return 'Speed (km/h) — higher is better';
   return 'Duration (min) — higher is better';
+}
+
+function getPlanMuscles(planMap) {
+  const muscles = [];
+  Object.values(planMap || {}).forEach((day) => {
+    day?.groups?.forEach((group) => {
+      if (group.name === 'Cardio' || group.name === 'Weight') return;
+      if (!muscles.includes(group.name)) muscles.push(group.name);
+    });
+  });
+  return muscles;
+}
+
+function getWeightChartValue(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const kg = parseFloat(entry.kg ?? entry.weight ?? entry.value) || 0;
+  return kg > 0 ? kg : null;
+}
+
+function getMuscleColor(muscleName, index = 0) {
+  return MUSCLE_COLORS[muscleName] || ['#7B72E8', '#E8724A', '#2DBF8E', '#4A9FE8', '#E8B84A', '#7ABF3A', '#9A9A9A'][index % 7];
+}
+
+function ChartViewport({ scrollKey, style, children }) {
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollToEnd({ animated: false });
+  }, [scrollKey]);
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      onContentSizeChange={() => {
+        scrollRef.current?.scrollToEnd({ animated: false });
+      }}
+      style={style}
+    >
+      {children}
+    </ScrollView>
+  );
 }
 
 export default function ProgressScreen() {
@@ -66,7 +105,7 @@ export default function ProgressScreen() {
   const [sessions, setSessions] = useState({});
   const [planMap, setPlanMap] = useState(PLAN);
   const [filter, setFilter] = useState('all');
-  const [selectedMuscle, setSelectedMuscle] = useState('Chest');
+  const [selectedMuscle, setSelectedMuscle] = useState('');
   const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
   const [selectedCardioExercise, setSelectedCardioExercise] = useState(DEFAULT_CARDIO_CONFIG[0]?.name || '');
 
@@ -84,24 +123,34 @@ export default function ProgressScreen() {
   }, []));
 
   const filteredKeys = getFilteredKeys(sessions, filter);
+  const muscleGroups = getPlanMuscles(planMap);
+  const activeMuscle = muscleGroups.includes(selectedMuscle) ? selectedMuscle : (muscleGroups[0] || '');
+
+  useEffect(() => {
+    if (!muscleGroups.length) return;
+    if (!muscleGroups.includes(selectedMuscle)) {
+      setSelectedMuscle(muscleGroups[0]);
+    }
+  }, [muscleGroups, selectedMuscle]);
 
   const getAllMusclesData = () => {
     const byMuscle = {};
-    MUSCLES.forEach(m => { byMuscle[m] = {}; });
+    muscleGroups.forEach(m => { byMuscle[m] = {}; });
     filteredKeys.forEach(k => {
       const dow = sessions[k]?._dow;
       const day = planMap[dow];
       if (!day) return;
       day.groups.forEach(g => {
+        if (g.name === 'Cardio' || g.name === 'Weight') return;
         const vol = getMuscleVolume(sessions[k], g.name, day);
         if (vol > 0) byMuscle[g.name][k] = vol;
       });
     });
-    const labelKeys = filteredKeys.filter(k => MUSCLES.some(m => byMuscle[m][k] > 0));
+    const labelKeys = filteredKeys.filter(k => muscleGroups.some(m => byMuscle[m][k] > 0));
     if (labelKeys.length < 2) return null;
-    const datasets = MUSCLES.filter(m => Object.keys(byMuscle[m]).length > 0).map(m => ({
+    const datasets = muscleGroups.filter(m => Object.keys(byMuscle[m]).length > 0).map((m, index) => ({
       data: labelKeys.map(k => byMuscle[m][k] || 0),
-      color: () => MUSCLE_COLORS[m],
+      color: () => getMuscleColor(m, index),
       strokeWidth: 2,
     }));
     return datasets.length > 0 ? { labels: labelKeys.map(formatDate), datasets } : null;
@@ -113,11 +162,11 @@ export default function ProgressScreen() {
       const dow = sessions[k]?._dow;
       const day = planMap[dow];
       if (!day) return;
-      const vol = getMuscleVolume(sessions[k], selectedMuscle, day);
+      const vol = getMuscleVolume(sessions[k], activeMuscle, day);
       if (vol > 0) pts.push({ key: k, vol });
     });
     if (pts.length < 2) return null;
-    const col = MUSCLE_COLORS[selectedMuscle];
+    const col = getMuscleColor(activeMuscle, muscleGroups.indexOf(activeMuscle));
     return {
       labels: pts.map(p => formatDate(p.key)),
       datasets: [{ data: pts.map(p => p.vol), color: () => col, strokeWidth: 2.5 }]
@@ -126,6 +175,22 @@ export default function ProgressScreen() {
 
   const overviewData = getAllMusclesData();
   const drillData = getDrillData();
+
+  const weightPoints = [];
+  filteredKeys.forEach((k) => {
+    const session = sessions[k] || {};
+    const entryKey = Object.keys(session).find(
+      (exercise) => isWeightExercise(exercise) && session[exercise],
+    );
+    const value = getWeightChartValue(entryKey ? session[entryKey] : null);
+    if (value !== null) weightPoints.push({ key: k, value });
+  });
+  const weightData = weightPoints.length >= 2
+    ? {
+      labels: weightPoints.map((p) => formatDate(p.key)),
+      datasets: [{ data: weightPoints.map((p) => p.value), color: () => '#A78BFA', strokeWidth: 2.5 }],
+    }
+    : null;
 
   const getCardioData = () => {
     const pts = [];
@@ -190,15 +255,17 @@ export default function ProgressScreen() {
           <Text style={[s.cardTitle, { color: t.text }]}>All muscles</Text>
           <Text style={[s.cardSub, { color: t.textSub }]}>Volume per session (kg)</Text>
           <View style={s.legendRow}>
-            {MUSCLES.map(m => (
+            {muscleGroups.map((m, index) => (
               <View key={m} style={s.legendItem}>
-                <View style={[s.legendDot, { backgroundColor: MUSCLE_COLORS[m] }]} />
+                <View style={[s.legendDot, { backgroundColor: getMuscleColor(m, index) }]} />
                 <Text style={[s.legendText, { color: t.textSub }]}>{m}</Text>
               </View>
             ))}
           </View>
           {overviewData ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <ChartViewport
+              scrollKey={`${overviewData.labels[overviewData.labels.length - 1] || ''}-${overviewData.labels.length}`}
+            >
               <LineChart
                 data={overviewData}
                 width={Math.max(W, overviewData.labels.length * 64)}
@@ -210,7 +277,7 @@ export default function ProgressScreen() {
                 withInnerLines={true}
                 withOuterLines={false}
               />
-            </ScrollView>
+            </ChartViewport>
           ) : (
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: t.textHint }]}>Log at least 2 sessions to see chart</Text>
@@ -223,28 +290,31 @@ export default function ProgressScreen() {
           <Text style={[s.cardSub, { color: t.textSub }]}>Tap a muscle to inspect its curve</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
             <View style={s.chipRow}>
-              {MUSCLES.map(m => {
-                const active = selectedMuscle === m;
+              {muscleGroups.map((m, index) => {
+                const active = activeMuscle === m;
+                const color = getMuscleColor(m, index);
                 return (
                   <TouchableOpacity
                     key={m}
-                    style={[s.chip, { borderColor: active ? MUSCLE_COLORS[m] : t.border, backgroundColor: active ? MUSCLE_COLORS[m] + '22' : t.inputBg }]}
+                    style={[s.chip, { borderColor: active ? color : t.border, backgroundColor: active ? color + '22' : t.inputBg }]}
                     onPress={() => setSelectedMuscle(m)}
                   >
-                    <View style={[s.chipDot, { backgroundColor: MUSCLE_COLORS[m] }]} />
-                    <Text style={[s.chipText, { color: active ? MUSCLE_COLORS[m] : t.textSub, fontWeight: active ? '600' : '400' }]}>{m}</Text>
+                    <View style={[s.chipDot, { backgroundColor: color }]} />
+                    <Text style={[s.chipText, { color: active ? color : t.textSub, fontWeight: active ? '600' : '400' }]}>{m}</Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
           </ScrollView>
           {drillData ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <ChartViewport
+              scrollKey={`${activeMuscle}-${drillData.labels[drillData.labels.length - 1] || ''}-${drillData.labels.length}`}
+            >
               <LineChart
                 data={drillData}
                 width={Math.max(W, drillData.labels.length * 64)}
                 height={180}
-                chartConfig={makeChartConfig(MUSCLE_COLORS[selectedMuscle])}
+                chartConfig={makeChartConfig(getMuscleColor(activeMuscle, muscleGroups.indexOf(activeMuscle)))}
                 bezier
                 style={{ borderRadius: 8 }}
                 withDots={true}
@@ -252,17 +322,52 @@ export default function ProgressScreen() {
                 withOuterLines={false}
                 withShadow={false}
               />
-            </ScrollView>
+            </ChartViewport>
           ) : (
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: t.textHint }]}>
-                Log at least 2 {selectedMuscle} sessions to see chart
+                Log at least 2 {activeMuscle || 'muscle'} sessions to see chart
               </Text>
             </View>
           )}
         </View>
 
-        <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}> 
+        <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}>
+          <Text style={[s.cardTitle, { color: t.text }]}>Weight</Text>
+          <Text style={[s.cardSub, { color: t.textSub }]}>Body weight over time (kg)</Text>
+          {weightData ? (
+            <ChartViewport
+              scrollKey={`${weightData.labels[weightData.labels.length - 1] || ''}-${weightData.labels.length}`}
+            >
+              <LineChart
+                data={weightData}
+                width={Math.max(W, weightData.labels.length * 64)}
+                height={180}
+                chartConfig={{
+                  ...makeChartConfig('#A78BFA'),
+                  decimalPlaces: 1,
+                  yAxisSuffix: ' kg',
+                }}
+                bezier
+                style={{ borderRadius: 8 }}
+                withDots={true}
+                withInnerLines={true}
+                withOuterLines={false}
+                withShadow={false}
+              />
+            </ChartViewport>
+          ) : (
+            <View style={s.empty}>
+              <Text style={[s.emptyText, { color: t.textHint }]}>
+                {weightPoints.length === 1
+                  ? "Log at least 2 weight entries to see chart"
+                  : "Log a weight entry to start tracking"}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <View style={[s.card, { backgroundColor: t.surface, borderColor: t.border }]}>
           <Text style={[s.cardTitle, { color: t.text }]}>{selectedCardioExercise} progress</Text>
           <Text style={[s.cardSub, { color: t.textSub }]}>
             {getCardioChartSubtitle(selectedCardioMetric)}
@@ -289,7 +394,9 @@ export default function ProgressScreen() {
             </View>
           </ScrollView>
           {cardioData ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <ChartViewport
+              scrollKey={`${selectedCardioExercise}-${cardioData.labels[cardioData.labels.length - 1] || ''}-${cardioData.labels.length}`}
+            >
               <LineChart
                 data={cardioData}
                 width={Math.max(W, cardioData.labels.length * 64)}
@@ -297,7 +404,7 @@ export default function ProgressScreen() {
                 chartConfig={{
                   ...makeChartConfig('#F35D8A'),
                   decimalPlaces: selectedCardioMetric === 'minutes' ? 0 : 1,
-                  yAxisSuffix: cardioIsSteps ? ' km/1k' : cardioIsDistance ? ' km/h' : ' min',
+                  yAxisSuffix: cardioIsSteps ? ' steps' : cardioIsDistance ? ' km/h' : ' min',
                 }}
                 bezier
                 style={{ borderRadius: 8 }}
@@ -306,7 +413,7 @@ export default function ProgressScreen() {
                 withOuterLines={false}
                 withShadow={false}
               />
-            </ScrollView>
+            </ChartViewport>
           ) : (
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: t.textHint }]}>Log at least 2 {selectedCardioExercise} sessions to see chart</Text>

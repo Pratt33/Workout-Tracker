@@ -64,15 +64,15 @@ export const PLAN = {
         name: "Chest",
         color: "#7B72E8",
         exercises: [
-          "Bench Press (Barbell)",
-          "Incline Bench Press (Dumbbell)",
-          "Machine Chest Press",
+          "Flat Barbell Press",
+          "Incline Dumbbell Press",
+          "Pec Deck",
         ],
       },
       {
         name: "Triceps",
         color: "#E8724A",
-        exercises: ["Skull Crushers", "Triceps Pressdown (Bar)"],
+        exercises: ["Skull Crushers", "Tricep Pushdowns (Rope)"],
       },
       CARDIO_GROUP,
       WEIGHT_GROUP,
@@ -85,15 +85,15 @@ export const PLAN = {
         name: "Back",
         color: "#2DBF8E",
         exercises: [
+          "Barbell Row",
           "Lat Pulldown",
-          "Cable Row",
-          "Seated Row Machine (Vertical Grip)",
+          "Face Pulls",
         ],
       },
       {
         name: "Biceps",
         color: "#4A9FE8",
-        exercises: ["Dumbbell Preacher Curl", "Machine Bicep Curl"],
+        exercises: ["Cable Curls", "Incline Dumbbell Curl"],
       },
       CARDIO_GROUP,
       WEIGHT_GROUP,
@@ -105,12 +105,12 @@ export const PLAN = {
       {
         name: "Shoulders",
         color: "#E8B84A",
-        exercises: ["Machine Shoulder Press", "Lean Away DB Lateral Raise"],
+        exercises: ["Barbell Overhead Press", "Cable Lateral Raise"],
       },
       {
         name: "Legs",
         color: "#7ABF3A",
-        exercises: ["Leg Press", "Leg Extension", "Seated Leg Curl Machine"],
+        exercises: ["Leg Press", "Leg Curl", "Leg Extension"],
       },
       CARDIO_GROUP,
       WEIGHT_GROUP,
@@ -123,17 +123,17 @@ export const PLAN = {
         name: "Chest",
         color: "#7B72E8",
         exercises: [
-          "Incline Bench Press (Barbell)",
-          "Bench Press (Dumbbell)",
-          "Pec Deck",
+          "Incline Barbell Press",
+          "Flat Dumbbell Press",
+          "Cable Fly (low-to-high / high-to-low)",
         ],
       },
       {
         name: "Triceps",
         color: "#E8724A",
         exercises: [
-          "Overhead Tricep Extension (Bar)",
-          "Machine Tricep Extension",
+          "Close-Grip Bench Press",
+          "Overhead Cable Tricep Extension (Rope)",
         ],
       },
       CARDIO_GROUP,
@@ -147,15 +147,15 @@ export const PLAN = {
         name: "Back",
         color: "#2DBF8E",
         exercises: [
-          "Seated Row Machine (Horizontal Grip)",
-          "One Arm Dumbbell Row",
+          "T-Bar Row",
+          "Single-Arm Dumbbell Row",
           "Straight-Arm Pulldown",
         ],
       },
       {
         name: "Biceps",
         color: "#4A9FE8",
-        exercises: ["Barbell Curl", "Hammer Curl"],
+        exercises: ["EZ Bar Preacher Curl", "Hammer Curl"],
       },
       CARDIO_GROUP,
       WEIGHT_GROUP,
@@ -167,7 +167,7 @@ export const PLAN = {
       {
         name: "Shoulders",
         color: "#E8B84A",
-        exercises: ["Reverse Pec Deck", "Machine Lateral Raise"],
+        exercises: ["Dumbbell Lateral Raise", "Cable Rear Delt Fly"],
       },
       { name: "Legs", color: "#7ABF3A", exercises: ["Squats"] },
       {
@@ -175,8 +175,8 @@ export const PLAN = {
         color: "#9A9A9A",
         exercises: [
           "Lying Leg Raise",
-          "Wrist Curl (Dumbbell)",
-          "Reverse Wrist Curl (Dumbbell)",
+          "Wrist Curls",
+          "Farmer's Carry",
         ],
       },
       CARDIO_GROUP,
@@ -195,8 +195,6 @@ export const MUSCLE_COLORS = {
   Legs: "#7ABF3A",
   "Abs, Wrist & Forearms": "#9A9A9A",
 };
-
-export const MUSCLES = Object.keys(MUSCLE_COLORS);
 
 export function applyCardioConfigToPlan(plan, cardioConfig) {
   if (!plan || !cardioConfig) return plan;

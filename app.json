@@ -14,7 +14,9 @@
       "package": "com.yourname.workouttracker",
       "softwareKeyboardLayoutMode": "pan"
     },
-    "plugins": [],
+    "plugins": [
+      "@react-native-community/datetimepicker"
+    ],
     "extra": {
       "eas": {
         "projectId": "fcde71d2-27e8-45da-844a-938f3dcaa21b"

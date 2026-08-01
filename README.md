@@ -1,4 +1,4 @@
-# Workout Tracker v4.2
+# Workout Tracker v4.3
 
 A practical workout logging app focused on consistency, progression tracking, and LLM-ready insights.
 
@@ -20,16 +20,13 @@ Goals:
 - LLM-ready export with annotations and derived metrics.
 - Rest-day declaration (including missed-day marking).
 
-## Version 4.2 (Release)
+## Version 4.3 (Release)
 
-This release (v4.2) includes the following highlights:
-- Fixed home UI logger back button position and layout flow on mobile.
-- Refactored history screen buttons to a secondary header row to prevent overlapping on mobile viewports.
-- Moved past session logging indicator badge to resolve close button clipping and make it fully clickable.
-- Linked storage and configurations across Today, History, and Progress screens to ensure customized splits load globally.
-- Implemented orientation-responsive chart scaling using dynamic window dimensions.
-- Added keyboard-friendly ScrollView persistence to settings modal and session editor.
-- Secured cardio rename migration in history database against index shifts.
+This release (v4.3) includes:
+- **Pinned Y-Axis on Charts**: Pinned Y-axis labels to the left of chart containers so they remain visible while swiping/scrolling data horizontally.
+- **Progress Screen UI Cleanup**: Removed redundant date/weight entry cards in the body weight tracking section to keep the focus solely on the chart visualization.
+- **Rest-Day Crash Fix**: Resolved a critical null-pointer crash in `DayLogger` when accessing the application on scheduled rest days (such as Sundays).
+- **v4.2 Features**: Dynamic chart orientation-scaling, settings modal scroll persistence, and robust cardio rename migrations.
 
 ## Main Challenges Faced
 - Keeping the data model simple but flexible.
@@ -61,8 +58,9 @@ This release (v4.2) includes the following highlights:
 - react-native-safe-area-context
 
 ## App Download Link
-Android v4.2 preview build:
-- https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/0e83b3d0-daff-45b8-b470-e593efca5a31
+Android build (v4.3):
+- Build details: https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/bf1d7853-bb8a-47d2-afa2-e415c2f6d884
+- Direct AAB: https://expo.dev/artifacts/eas/_y_rF_easX-4qSPT8eCNhQgLG94YotXDNmw7QrCK6kQ.aab
 
 ## Future Improvements
 - Personal best tracking and milestones.

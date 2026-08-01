@@ -523,7 +523,7 @@ export default function SettingsModal({
                           <Ionicons
                             name="trash-outline"
                             size={16}
-                            color={t.deadColor}
+                            color={t.destructiveColor}
                           />
                         </TouchableOpacity>
                       </View>

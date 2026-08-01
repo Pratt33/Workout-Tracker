@@ -13,7 +13,7 @@ export const lightTheme = {
   inputBg: '#f5f5f2',
   accent: '#534AB7',
   accentText: '#ffffff',
-  deadColor: '#993C1D',
+  destructiveColor: '#993C1D',
   success: '#1D9E75',
   cardShadow: 'rgba(0,0,0,0.04)',
 };
@@ -31,7 +31,7 @@ export const darkTheme = {
   inputBg: '#252525',
   accent: '#7B72E8',
   accentText: '#ffffff',
-  deadColor: '#E0714A',
+  destructiveColor: '#E0714A',
   success: '#2DBF8E',
   cardShadow: 'rgba(0,0,0,0.3)',
 };

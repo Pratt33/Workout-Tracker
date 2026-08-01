@@ -1,8 +1,41 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PLAN_VERSION } from "./data";
+import { normalizeWorkoutSets } from "./workoutSets";
 
 const KEY = "workout_sessions_v1";
 const PLAN_KEY = "workout_plan_v1";
+
+function normalizeSessionData(sessionData) {
+  if (!sessionData || typeof sessionData !== "object" || Array.isArray(sessionData)) {
+    return sessionData;
+  }
+
+  const next = {};
+  Object.entries(sessionData).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      next[key] = normalizeWorkoutSets(value);
+      return;
+    }
+    if (value && typeof value === "object") {
+      next[key] = { ...value };
+      return;
+    }
+    next[key] = value;
+  });
+  return next;
+}
+
+function normalizeSessionsMap(sessions) {
+  if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
+    return {};
+  }
+
+  const next = {};
+  Object.entries(sessions).forEach(([key, value]) => {
+    next[key] = normalizeSessionData(value);
+  });
+  return next;
+}
 
 const LEGACY_EXERCISE_RENAMES = [
   { from: "Machine Walking", to: "Walking" },
@@ -42,10 +75,11 @@ export async function loadSessions() {
     const raw = await AsyncStorage.getItem(KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     const { sessions, changed } = migrateLegacyExerciseNames(parsed);
-    if (changed) {
-      await AsyncStorage.setItem(KEY, JSON.stringify(sessions));
+    const normalized = normalizeSessionsMap(sessions);
+    if (changed || JSON.stringify(normalized) !== JSON.stringify(sessions)) {
+      await AsyncStorage.setItem(KEY, JSON.stringify(normalized));
     }
-    return sessions;
+    return normalized;
   } catch {
     return {};
   }
@@ -53,7 +87,7 @@ export async function loadSessions() {
 
 export async function saveSessions(sessions) {
   try {
-    await AsyncStorage.setItem(KEY, JSON.stringify(sessions));
+    await AsyncStorage.setItem(KEY, JSON.stringify(normalizeSessionsMap(sessions)));
   } catch {}
 }
 
@@ -102,7 +136,7 @@ export function getSessionVolume(sessionData) {
   let vol = 0;
   Object.entries(sessionData).forEach(([k, sets]) => {
     if (k.startsWith("_") || !Array.isArray(sets)) return;
-    sets.forEach((s) => {
+    normalizeWorkoutSets(sets).forEach((s) => {
       vol += (parseFloat(s.w) || 0) * (parseInt(s.r) || 0);
     });
   });
@@ -118,7 +152,7 @@ export function getMuscleVolume(sessionData, muscleName, dayPlan) {
       const resolvedKey = resolveExerciseKey(sessionData, ex);
       const entry = sessionData[resolvedKey];
       if (Array.isArray(entry)) {
-        entry.forEach((s) => {
+        normalizeWorkoutSets(entry).forEach((s) => {
           vol += (parseFloat(s.w) || 0) * (parseInt(s.r) || 0);
         });
       }
@@ -171,7 +205,7 @@ export function getLatestExerciseSets(sessions, exerciseName, excludeKey) {
     const sets = Array.isArray(day?.[exerciseName]) ? day[exerciseName] : null;
     if (sets && sets.length > 0) {
       return {
-        sets: JSON.parse(JSON.stringify(sets)),
+        sets: normalizeWorkoutSets(sets),
         dateKey: k,
       };
     }
@@ -249,7 +283,7 @@ export function buildLLMExportPayload(sessions, planMap) {
         const sets = Array.isArray(session[ex]) ? session[ex] : [];
         if (sets.length === 0) return;
         touched.add(g.name);
-        sets.forEach((set) => {
+        normalizeWorkoutSets(sets).forEach((set) => {
           const vol = (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
           sessionVolume += vol;
           sessionSets += 1;
@@ -548,7 +582,7 @@ export function buildCSVExport(sessions, planMap) {
             ].join(","),
           );
         } else if (Array.isArray(entry)) {
-          entry.forEach((set, i) => {
+          normalizeWorkoutSets(entry).forEach((set, i) => {
             const w = parseFloat(set.w) || 0;
             const r = parseInt(set.r) || 0;
             const vol = w * r;

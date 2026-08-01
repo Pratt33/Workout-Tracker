@@ -9,10 +9,13 @@ import {
   StyleSheet,
   TextInput,
   Modal,
+  BackHandler,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import DayLogger from "./DayLogger";
 import CardioLogger from "./CardioLogger";
 import {
@@ -38,6 +41,7 @@ import {
   loadCardioConfig,
 } from "../app/storage";
 import { useTheme } from "../app/theme";
+import { createWorkoutSets, normalizeWorkoutSets } from "./workoutSets";
 
 const FILTERS = [
   { key: "4w", label: "4 weeks" },
@@ -45,13 +49,12 @@ const FILTERS = [
   { key: "all", label: "All time" },
 ];
 
-const EMPTY_SETS = () => [
-  { label: "Set 1", w: "", r: "10", dead: false },
-  { label: "Set 2", w: "", r: "10", dead: false },
-  { label: "Set 3", w: "", r: "", dead: true },
-  { label: "Drop 1", w: "", r: "", dead: true },
-  { label: "Drop 2", w: "", r: "", dead: true },
-];
+function dateToKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 export default function HistoryScreen() {
   const t = useTheme();
@@ -71,6 +74,8 @@ export default function HistoryScreen() {
   const [pastLogModalVisible, setPastLogModalVisible] = useState(false);
   const [pastLogDate, setPastLogDate] = useState(null);
   const [pastLogDow, setPastLogDow] = useState(null);
+  const [pastLogPickerDate, setPastLogPickerDate] = useState(new Date());
+  const [showPastLogDatePicker, setShowPastLogDatePicker] = useState(false);
   const [activeDayLogger, setActiveDayLogger] = useState(null);
 
   useFocusEffect(
@@ -84,6 +89,28 @@ export default function HistoryScreen() {
         },
       );
     }, []),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      const onHardwareBackPress = () => {
+        if (editSessionKey && activeEx) {
+          setActiveEx(null);
+          return true;
+        }
+        if (editSessionKey) {
+          closeSessionEditor();
+          return true;
+        }
+        return false;
+      };
+
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        onHardwareBackPress,
+      );
+      return () => subscription.remove();
+    }, [editSessionKey, activeEx]),
   );
 
   const filteredKeys = getFilteredKeys(sessions, filter).slice().reverse();
@@ -163,6 +190,23 @@ export default function HistoryScreen() {
     setActiveWeightKg("");
   };
 
+  const syncPastLogDate = (date) => {
+    if (!date) return;
+    setPastLogPickerDate(date);
+    setPastLogDate(dateToKey(date));
+    setPastLogDow(date.getDay());
+  };
+
+  const openPastLogModal = () => {
+    const today = new Date();
+    syncPastLogDate(today);
+    setPastLogModalVisible(true);
+  };
+
+  const openPastLogDatePicker = () => {
+    setShowPastLogDatePicker(true);
+  };
+
   const closeSessionEditor = () => {
     setEditSessionKey(null);
     setActiveEx(null);
@@ -174,10 +218,6 @@ export default function HistoryScreen() {
     const dow = session._dow;
     const day = planMap[dow];
     const localRenames = session._localRenames || {};
-    const reverseRenames = {};
-    Object.entries(localRenames).forEach(([orig, renamed]) => {
-      reverseRenames[renamed] = orig;
-    });
 
     const planned = day?.groups?.flatMap((g) => g.exercises) || [];
     const existing = Object.keys(session).filter(
@@ -205,10 +245,6 @@ export default function HistoryScreen() {
   const openExerciseEditor = (exerciseName) => {
     const session = sessions[editSessionKey] || {};
     const localRenames = session._localRenames || {};
-    const reverseRenames = {};
-    Object.entries(localRenames).forEach(([orig, renamed]) => {
-      reverseRenames[renamed] = orig;
-    });
     const sessionKey = localRenames[exerciseName] || exerciseName;
     const existing = sessions[editSessionKey]?.[sessionKey];
     if (isCardioExercise(exerciseName, cardioConfig)) {
@@ -239,7 +275,6 @@ export default function HistoryScreen() {
       return;
     }
     const cardio = isCardioExercise(sessionKey, cardioConfig);
-    const nextDefault = EMPTY_SETS();
     if (existing?.length) {
       if (cardio) {
         const total = existing.reduce((a, s) => a + (parseFloat(s.m) || 0), 0);
@@ -247,10 +282,10 @@ export default function HistoryScreen() {
           { label: "Minute Slot 1", m: total > 0 ? String(total) : "" },
         ]);
       } else {
-        setActiveSets(JSON.parse(JSON.stringify(existing)));
+        setActiveSets(normalizeWorkoutSets(existing));
       }
     } else {
-      setActiveSets(nextDefault);
+      setActiveSets(createWorkoutSets());
     }
     setCardioMinutes("");
     setCardioKm("");
@@ -276,7 +311,7 @@ export default function HistoryScreen() {
         steps: cardioSteps,
       };
     } else {
-      next[editSessionKey][activeEx] = activeSets;
+      next[editSessionKey][activeEx] = normalizeWorkoutSets(activeSets);
     }
     setSessions(next);
     await saveSessions(next);
@@ -468,7 +503,7 @@ export default function HistoryScreen() {
                       <Text
                         style={[
                           s.setLabel,
-                          { color: set.dead ? t.deadColor : t.textSub },
+                          { color: t.textSub },
                           { flex: 1.4 },
                         ]}
                       >
@@ -664,8 +699,8 @@ export default function HistoryScreen() {
             ]}
             onPress={() => deleteSingleSession(editSessionKey)}
           >
-            <Ionicons name="trash-outline" size={16} color={t.deadColor} />
-            <Text style={[s.deleteSessionBtnText, { color: t.deadColor }]}>
+            <Ionicons name="trash-outline" size={16} color={t.destructiveColor} />
+            <Text style={[s.deleteSessionBtnText, { color: t.destructiveColor }]}> 
               Delete this session
             </Text>
           </TouchableOpacity>
@@ -734,7 +769,7 @@ export default function HistoryScreen() {
                 ]}
                 onPress={deleteSelected}
               >
-                <Ionicons name="trash-outline" size={14} color={t.deadColor} />
+                <Ionicons name="trash-outline" size={14} color={t.destructiveColor} />
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -769,7 +804,7 @@ export default function HistoryScreen() {
                 s.exportBtn,
                 { borderColor: t.border, backgroundColor: t.inputBg, flex: 1, alignItems: "center" },
               ]}
-              onPress={() => setPastLogModalVisible(true)}
+              onPress={openPastLogModal}
             >
               <Text style={[s.exportBtnText, { color: t.text }]}>
                 Log past day
@@ -976,20 +1011,38 @@ export default function HistoryScreen() {
             </Text>
 
             <Text style={[s.pastLogLabel, { color: t.textSub }]}>Date</Text>
-            <TextInput
+            <TouchableOpacity
               style={[
-                s.editInput,
+                s.pastLogDateBtn,
                 {
                   backgroundColor: t.inputBg,
                   borderColor: t.border,
-                  color: t.text,
                 },
               ]}
-              value={pastLogDate || ""}
-              onChangeText={setPastLogDate}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor={t.textHint}
-            />
+              onPress={openPastLogDatePicker}
+            >
+              <Ionicons name="calendar-outline" size={16} color={t.accent} />
+              <Text style={[s.pastLogDateText, { color: t.text }]}> 
+                {pastLogDate ? formatDate(pastLogDate) : "Choose a date"}
+              </Text>
+            </TouchableOpacity>
+            {(Platform.OS === "ios" || showPastLogDatePicker) && (
+              <View style={s.pastLogPickerWrap}>
+                <DateTimePicker
+                  value={pastLogPickerDate}
+                  mode="date"
+                  display={Platform.OS === "android" ? "calendar" : "spinner"}
+                  onChange={(_, selectedDate) => {
+                    if (selectedDate) {
+                      syncPastLogDate(selectedDate);
+                    }
+                    if (Platform.OS !== "ios") {
+                      setShowPastLogDatePicker(false);
+                    }
+                  }}
+                />
+              </View>
+            )}
 
             <Text style={[s.pastLogLabel, { color: t.textSub, marginTop: 14 }]}>
               Which day's exercises?
@@ -1046,13 +1099,10 @@ export default function HistoryScreen() {
               <TouchableOpacity
                 style={[s.primaryBtn, { backgroundColor: t.accent }]}
                 onPress={() => {
-                  const isValidDate = /^\d{4}-\d{2}-\d{2}$/.test(
-                    pastLogDate || "",
-                  );
-                  if (!isValidDate || pastLogDow === null) {
+                  if (!pastLogDate || pastLogDow === null) {
                     Alert.alert(
                       "Missing info",
-                      "Please enter a valid date (YYYY-MM-DD) and select a day.",
+                      "Please choose a date and select a day.",
                     );
                     return;
                   }
@@ -1277,6 +1327,21 @@ const s = StyleSheet.create({
   pastLogTitle: { fontSize: 18, fontWeight: "700", marginBottom: 4 },
   pastLogSub: { fontSize: 13, marginBottom: 16 },
   pastLogLabel: { fontSize: 12, fontWeight: "600", marginBottom: 8 },
+  pastLogDateBtn: {
+    minHeight: 48,
+    borderWidth: 0.5,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  pastLogDateText: { fontSize: 14, fontWeight: "600" },
+  pastLogPickerWrap: {
+    marginTop: 10,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
   pastLogDayRow: { flexDirection: "row", gap: 6, flexWrap: "wrap" },
   pastLogDayBtn: {
     paddingHorizontal: 14,
