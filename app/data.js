@@ -1,21 +1,21 @@
 export const DEFAULT_CARDIO_CONFIG = [
-  { name: "Walking", metric: "steps+km", stepGoal: 10000 },
-  { name: "Cycling", metric: "minutes+km" },
-  { name: "Plank", metric: "minutes" },
+  { id: "walking", name: "Walking", metric: "steps+km", stepGoal: 10000 },
+  { id: "cycling", name: "Cycling", metric: "minutes+km" },
+  { id: "plank", name: "Plank", metric: "minutes" },
 ];
 
-export const PLAN_VERSION = 1;
+export const PLAN_VERSION = 2;
 
 // These functions accept an optional cardioConfig array.
 // If not passed they fall back to DEFAULT_CARDIO_CONFIG.
 // All screens should pass the loaded config from AsyncStorage.
 
 export function isCardioExercise(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
-  return config.some((c) => c.name === exerciseName);
+  return config.some((c) => c.name === exerciseName || c.id === exerciseName);
 }
 
 export function getCardioEntry(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
-  return config.find((c) => c.name === exerciseName) || null;
+  return config.find((c) => c.name === exerciseName || c.id === exerciseName) || null;
 }
 
 export function cardioHasDistance(
@@ -167,9 +167,17 @@ export const PLAN = {
       {
         name: "Shoulders",
         color: "#E8B84A",
-        exercises: ["Dumbbell Lateral Raise", "Cable Rear Delt Fly"],
+        exercises: [
+          "Dumbbell Lateral Raise",
+          "Cable Rear Delt Fly",
+          "Dumbbell Shrugs",
+        ],
       },
-      { name: "Legs", color: "#7ABF3A", exercises: ["Squats"] },
+      {
+        name: "Legs",
+        color: "#7ABF3A",
+        exercises: ["Squats", "Romanian Deadlifts"],
+      },
       {
         name: "Abs, Wrist & Forearms",
         color: "#9A9A9A",

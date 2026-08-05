@@ -27,6 +27,7 @@ import {
   isWeightExercise,
   cardioHasDistance,
   cardioMetric,
+  getCardioEntry,
 } from "../app/data";
 import AppLogo from "../app/AppLogo";
 import {
@@ -39,6 +40,7 @@ import {
   buildLLMExportPayload,
   buildCSVExport,
   loadCardioConfig,
+  saveRestDay,
 } from "../app/storage";
 import { useTheme } from "../app/theme";
 import { createWorkoutSets, normalizeWorkoutSets } from "./workoutSets";
@@ -146,6 +148,9 @@ export default function HistoryScreen() {
     });
     setSessions(next);
     await saveSessions(next);
+    for (const k of keys) {
+      await saveRestDay(k, false);
+    }
   };
 
   const deleteSelected = () => {
@@ -232,12 +237,16 @@ export default function HistoryScreen() {
       if (!unique.includes(displayName)) unique.push(displayName);
     });
     const renamedValues = Object.values(localRenames);
-    existing.forEach((ex) => {
+    existing.forEach((keyOrName) => {
+      const isCardio = isCardioExercise(keyOrName, cardioConfig);
+      const displayName = isCardio 
+        ? (getCardioEntry(keyOrName, cardioConfig)?.name || keyOrName) 
+        : keyOrName;
       // Skip keys that are the result of a local rename — they're already represented
-      if (renamedValues.includes(ex)) return;
+      if (renamedValues.includes(displayName)) return;
       // Skip internal keys
-      if (ex.startsWith("_")) return;
-      if (!unique.includes(ex)) unique.push(ex);
+      if (keyOrName.startsWith("_")) return;
+      if (!unique.includes(displayName)) unique.push(displayName);
     });
     return unique;
   };
@@ -245,10 +254,21 @@ export default function HistoryScreen() {
   const openExerciseEditor = (exerciseName) => {
     const session = sessions[editSessionKey] || {};
     const localRenames = session._localRenames || {};
-    const sessionKey = localRenames[exerciseName] || exerciseName;
-    const existing = sessions[editSessionKey]?.[sessionKey];
-    if (isCardioExercise(exerciseName, cardioConfig)) {
-      const entry = sessions[editSessionKey]?.[exerciseName];
+    const isCardio = isCardioExercise(exerciseName, cardioConfig);
+    const storageKey = isCardio
+      ? (getCardioEntry(exerciseName, cardioConfig)?.id || exerciseName)
+      : (localRenames[exerciseName] || exerciseName);
+    
+    let existing = sessions[editSessionKey]?.[storageKey];
+    if (existing === undefined && isCardio) {
+      const entry = getCardioEntry(exerciseName, cardioConfig);
+      if (entry && sessions[editSessionKey]?.[entry.name] !== undefined) {
+        existing = sessions[editSessionKey][entry.name];
+      }
+    }
+
+    if (isCardio) {
+      const entry = existing;
       if (entry && typeof entry === "object" && !Array.isArray(entry)) {
         setCardioMinutes(String(entry.minutes ?? entry.m ?? ""));
         setCardioKm(String(entry.km ?? ""));
@@ -262,7 +282,7 @@ export default function HistoryScreen() {
       setActiveEx(exerciseName);
       return;
     }
-    if (isWeightExercise(sessionKey)) {
+    if (isWeightExercise(storageKey)) {
       setActiveWeightKg(
         existing && typeof existing === "object"
           ? String(existing.kg ?? "")
@@ -271,10 +291,10 @@ export default function HistoryScreen() {
       setActiveSets([]);
       setCardioMinutes("");
       setCardioKm("");
-      setActiveEx(sessionKey);
+      setActiveEx(storageKey);
       return;
     }
-    const cardio = isCardioExercise(sessionKey, cardioConfig);
+    const cardio = isCardioExercise(storageKey, cardioConfig);
     if (existing?.length) {
       if (cardio) {
         const total = existing.reduce((a, s) => a + (parseFloat(s.m) || 0), 0);
@@ -290,7 +310,7 @@ export default function HistoryScreen() {
     setCardioMinutes("");
     setCardioKm("");
     setActiveWeightKg("");
-    setActiveEx(sessionKey);
+    setActiveEx(storageKey);
   };
 
   const updateSet = (i, field, val) => {
@@ -302,16 +322,25 @@ export default function HistoryScreen() {
   const saveExerciseEdits = async () => {
     const next = { ...sessions };
     if (!next[editSessionKey]) return;
-    if (isWeightExercise(activeEx)) {
-      next[editSessionKey][activeEx] = { kg: activeWeightKg };
-    } else if (isCardioExercise(activeEx, cardioConfig)) {
-      next[editSessionKey][activeEx] = {
+    
+    const isCardio = isCardioExercise(activeEx, cardioConfig);
+    const storageKey = isCardio
+      ? (getCardioEntry(activeEx, cardioConfig)?.id || activeEx)
+      : activeEx;
+
+    if (isWeightExercise(storageKey)) {
+      next[editSessionKey][storageKey] = { kg: activeWeightKg };
+    } else if (isCardio) {
+      next[editSessionKey][storageKey] = {
         minutes: cardioMinutes,
         km: cardioKm,
         steps: cardioSteps,
       };
+      if (storageKey !== activeEx) {
+        delete next[editSessionKey][activeEx];
+      }
     } else {
-      next[editSessionKey][activeEx] = normalizeWorkoutSets(activeSets);
+      next[editSessionKey][storageKey] = normalizeWorkoutSets(activeSets);
     }
     setSessions(next);
     await saveSessions(next);
@@ -349,7 +378,7 @@ export default function HistoryScreen() {
 
   const exportForLLM = async () => {
     try {
-      const csv = buildCSVExport(sessions, planMap);
+      const csv = buildCSVExport(sessions, planMap, cardioConfig);
       await Share.share({
         title: "Workout Data Export",
         message: csv,
@@ -628,7 +657,16 @@ export default function HistoryScreen() {
           contentContainerStyle={{ paddingBottom: 18 }}
         >
           {exercises.map((ex) => {
-            const sets = Array.isArray(session[ex]) ? session[ex] : [];
+            const isCardio = isCardioExercise(ex, cardioConfig);
+            const storageKey = isCardio ? (getCardioEntry(ex, cardioConfig)?.id || ex) : ex;
+            let entry = session[storageKey];
+            if (entry === undefined && isCardio) {
+              const cardioEntry = getCardioEntry(ex, cardioConfig);
+              if (cardioEntry && session[cardioEntry.name] !== undefined) {
+                entry = session[cardioEntry.name];
+              }
+            }
+            const sets = Array.isArray(entry) ? entry : [];
             const vol = sets.reduce(
               (a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0),
               0,
@@ -647,16 +685,14 @@ export default function HistoryScreen() {
                   <Text style={[s.editRowSub, { color: t.textSub }]}>
                     {isWeightExercise(ex)
                       ? (() => {
-                          const entry = session[ex];
                           const kg =
                             entry && typeof entry === "object"
                               ? entry.kg
                               : null;
                           return kg ? `${kg} kg` : "Not logged";
                         })()
-                      : isCardioExercise(ex, cardioConfig)
+                      : isCardio
                         ? (() => {
-                            const entry = session[ex];
                             if (!entry || typeof entry !== "object")
                               return "Not logged";
                             const metric = cardioMetric(ex, cardioConfig);
@@ -857,11 +893,14 @@ export default function HistoryScreen() {
 
         {filteredKeys.length === 0 && (
           <View style={s.empty}>
+            <View style={[s.emptyIcon, { backgroundColor: t.inputBg, borderColor: t.border }]}>
+              <Ionicons name="calendar-outline" size={28} color={t.textSub} />
+            </View>
             <Text style={[s.emptyTitle, { color: t.text }]}>
               No sessions yet
             </Text>
             <Text style={[s.emptySub, { color: t.textSub }]}>
-              Head to Today and log your first workout.
+              Head to Today, select an exercise, and log your first workout to see it here.
             </Text>
           </View>
         )}
@@ -959,7 +998,7 @@ export default function HistoryScreen() {
                       s.tag,
                       {
                         backgroundColor:
-                          (MUSCLE_COLORS[g.name] || g.color || "#888888") +
+                          (MUSCLE_COLORS[g.name] || g.color || t.textSub) +
                           "28",
                       },
                     ]}
@@ -969,7 +1008,7 @@ export default function HistoryScreen() {
                         s.tagDot,
                         {
                           backgroundColor:
-                            MUSCLE_COLORS[g.name] || g.color || "#888888",
+                            MUSCLE_COLORS[g.name] || g.color || t.textSub,
                         },
                       ]}
                     />
@@ -977,7 +1016,7 @@ export default function HistoryScreen() {
                       style={[
                         s.tagText,
                         {
-                          color: MUSCLE_COLORS[g.name] || g.color || "#888888",
+                          color: MUSCLE_COLORS[g.name] || g.color || t.textSub,
                         },
                       ]}
                     >
@@ -996,7 +1035,7 @@ export default function HistoryScreen() {
         animationType="slide"
         onRequestClose={() => setPastLogModalVisible(false)}
       >
-        <View style={s.pastLogOverlay}>
+        <View style={[s.pastLogOverlay, { backgroundColor: t.scrim }]}>
           <View
             style={[
               s.pastLogSheet,
@@ -1155,8 +1194,8 @@ const s = StyleSheet.create({
   smallBtn: {
     borderWidth: 0.5,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    height: 31,
+    paddingHorizontal: 12,
+    height: 40,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1167,9 +1206,11 @@ const s = StyleSheet.create({
   filterRow: { flexDirection: "row", gap: 6, marginBottom: 10 },
   filterBtn: {
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 0.5,
+    minHeight: 36,
+    justifyContent: "center",
   },
   filterText: { fontSize: 12 },
   histItem: {
@@ -1226,6 +1267,15 @@ const s = StyleSheet.create({
   tagDot: { width: 5, height: 5, borderRadius: 3 },
   tagText: { fontSize: 11, fontWeight: "500" },
   empty: { padding: 48, alignItems: "center" },
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    marginBottom: 14,
+  },
   emptyTitle: { fontSize: 15, fontWeight: "600", marginBottom: 6 },
   emptySub: { fontSize: 13, textAlign: "center", lineHeight: 18 },
   backChip: {
@@ -1314,7 +1364,6 @@ const s = StyleSheet.create({
   primaryBtnText: { fontSize: 12, fontWeight: "700" },
   pastLogOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "flex-end",
   },
   pastLogSheet: {

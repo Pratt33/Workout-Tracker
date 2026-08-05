@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
+import { Ionicons } from '@expo/vector-icons';
 import AppLogo from '../app/AppLogo';
 import {
   PLAN,
@@ -14,6 +15,7 @@ import {
   applyCardioConfigToPlan,
   isWeightExercise,
   cardioMetric,
+  getCardioEntry,
 } from '../app/data';
 import {
   loadSessions,
@@ -76,25 +78,127 @@ function getMuscleColor(muscleName, index = 0) {
   return MUSCLE_COLORS[muscleName] || ['#7B72E8', '#E8724A', '#2DBF8E', '#4A9FE8', '#E8B84A', '#7ABF3A', '#9A9A9A'][index % 7];
 }
 
-function ChartViewport({ scrollKey, style, children }) {
-  const scrollRef = useRef(null);
+// Fixed-left Y-axis helpers.
+// react-native-chart-kit draws the Y-axis numbers and horizontal (value) grid
+// lines inside the same SVG as the plot, so wrapping it in a ScrollView makes
+// the axis scroll away too. To keep the Y-axis fixed while the plot scrolls,
+// we disable the chart's in-SVG axis (horizontal lines + labels) and instead
+// draw a fixed, non-scrolling axis + value grid at the identical computed
+// positions. The plot itself still scrolls horizontally (latest stays on the
+// right via scrollToEnd).
+const Y_AXIS_W = 44;
+const PAD_TOP = 8;
+const CHART_SEGMENTS = 4;
+
+function getFlatPoints(data) {
+  const out = [];
+  (data?.datasets || []).forEach((ds) =>
+    (ds.data || []).forEach((v) => {
+      if (v != null && !Number.isNaN(Number(v))) out.push(Number(v));
+    }),
+  );
+  return out;
+}
+
+function computeYAxis(data, height) {
+  const points = getFlatPoints(data);
+  if (!points.length) return { lines: [], ticks: [] };
+  const min = Math.min.apply(null, points);
+  const max = Math.max.apply(null, points);
+  const scaler = max - min || 1;
+  const segs = min === max ? 1 : CHART_SEGMENTS;
+  const base = height * 0.75;
+  const lines = [];
+  const ticks = [];
+  for (let i = 0; i <= segs; i++) {
+    const y = (base / segs) * i + PAD_TOP;
+    lines.push({ y });
+    if (segs === 1) {
+      // chart-kit shows a single value label for flat data, at the bottom row
+      if (i === segs) ticks.push({ y, value: points[0] });
+    } else {
+      // y increases downward (i=0 is the top); chart-kit places max at the top
+      // and min at the bottom, so the value must run opposite to i.
+      ticks.push({ y, value: (scaler / segs) * (segs - i) + min });
+    }
+  }
+  return { lines, ticks };
+}
+
+function FixedAxisChart({
+  data,
+  height,
+  decimalPlaces,
+  chartWidth,
+  scrollKey,
+  chartConfig,
+  showDots = false,
+}) {
+  const t = useTheme();
+  const ref = useRef(null);
 
   useEffect(() => {
-    scrollRef.current?.scrollToEnd({ animated: false });
+    ref.current?.scrollToEnd({ animated: false });
   }, [scrollKey]);
 
+  const { lines, ticks } = computeYAxis(data, height);
+
   return (
-    <ScrollView
-      ref={scrollRef}
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      onContentSizeChange={() => {
-        scrollRef.current?.scrollToEnd({ animated: false });
-      }}
-      style={style}
-    >
-      {children}
-    </ScrollView>
+    <View style={s.chartRow}>
+      <View style={[s.yAxis, { height, borderColor: t.border }]}>
+        {ticks.map((tk, i) => (
+          <View
+            key={i}
+            pointerEvents="none"
+            style={[s.tickWrap, { top: tk.y - 7 }]}
+          >
+            <Text style={[s.tickText, { color: t.textSub }]}>
+              {tk.value.toFixed(decimalPlaces)}
+            </Text>
+          </View>
+        ))}
+      </View>
+      <View style={[s.plotWrap, { height }]}>
+        <ScrollView
+          ref={ref}
+          horizontal
+          style={s.plot}
+          showsHorizontalScrollIndicator={false}
+          onContentSizeChange={() => {
+            ref.current?.scrollToEnd({ animated: false });
+          }}
+        >
+          <LineChart
+            data={data}
+            width={chartWidth}
+            height={height}
+            chartConfig={{ ...chartConfig, decimalPlaces }}
+            bezier
+            style={{ borderRadius: 8, paddingTop: PAD_TOP, paddingRight: 0 }}
+            withDots={showDots}
+            withInnerLines={true}
+            withOuterLines={false}
+            withHorizontalLines={false}
+            withHorizontalLabels={false}
+            withVerticalLabels={true}
+            withShadow={false}
+            transparent
+          />
+        </ScrollView>
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          {lines.map((l, i) => (
+            <View
+              key={i}
+              style={[
+                s.gridLine,
+                { backgroundColor: t.border + "99" },
+                { top: l.y - 0.25 },
+              ]}
+            />
+          ))}
+        </View>
+      </View>
+    </View>
   );
 }
 
@@ -188,14 +292,20 @@ export default function ProgressScreen() {
   const weightData = weightPoints.length >= 2
     ? {
       labels: weightPoints.map((p) => formatDate(p.key)),
-      datasets: [{ data: weightPoints.map((p) => p.value), color: () => '#A78BFA', strokeWidth: 2.5 }],
+      datasets: [{ data: weightPoints.map((p) => p.value), color: () => t.chartWeight, strokeWidth: 2.5 }],
     }
     : null;
 
   const getCardioData = () => {
     const pts = [];
+    const entryConfig = getCardioEntry(selectedCardioExercise, cardioConfig);
+    const storageKey = entryConfig ? entryConfig.id : selectedCardioExercise;
+
     filteredKeys.forEach(k => {
-      const entry = sessions[k]?.[selectedCardioExercise];
+      let entry = sessions[k]?.[storageKey];
+      if (entry === undefined && entryConfig) {
+        entry = sessions[k]?.[entryConfig.name];
+      }
       const value = getCardioChartValue(entry, selectedCardioExercise, cardioConfig);
       if (value !== null) pts.push({ key: k, value });
     });
@@ -203,7 +313,7 @@ export default function ProgressScreen() {
     const metric = cardioMetric(selectedCardioExercise, cardioConfig);
     return {
       labels: pts.map(p => formatDate(p.key)),
-      datasets: [{ data: pts.map(p => p.value), color: () => '#F35D8A', strokeWidth: 2.5 }],
+      datasets: [{ data: pts.map(p => p.value), color: () => t.chartCardio, strokeWidth: 2.5 }],
       _metric: metric,
     };
   };
@@ -263,24 +373,24 @@ export default function ProgressScreen() {
             ))}
           </View>
           {overviewData ? (
-            <ChartViewport
-              scrollKey={`${overviewData.labels[overviewData.labels.length - 1] || ''}-${overviewData.labels.length}`}
-            >
-              <LineChart
-                data={overviewData}
-                width={Math.max(W, overviewData.labels.length * 64)}
-                height={200}
-                chartConfig={makeChartConfig()}
-                bezier
-                style={{ borderRadius: 8 }}
-                withDots={false}
-                withInnerLines={true}
-                withOuterLines={false}
-              />
-            </ChartViewport>
+            <FixedAxisChart
+              data={overviewData}
+              height={200}
+              decimalPlaces={0}
+              chartWidth={Math.max(
+                W - Y_AXIS_W,
+                overviewData.labels.length * 64,
+              )}
+              scrollKey={`${overviewData.labels[overviewData.labels.length - 1] || ""}-${overviewData.labels.length}`}
+              chartConfig={makeChartConfig()}
+            />
           ) : (
             <View style={s.empty}>
-              <Text style={[s.emptyText, { color: t.textHint }]}>Log at least 2 sessions to see chart</Text>
+              <View style={[s.emptyIcon, { backgroundColor: t.inputBg, borderColor: t.border }]}>
+                <Ionicons name="analytics-outline" size={26} color={t.textSub} />
+              </View>
+              <Text style={[s.emptyText, { color: t.textSub }]}>Log at least 2 sessions to see a trend</Text>
+              <Text style={[s.emptySubText, { color: t.textSub }]}>Track your first week in Today and a volume curve appears here.</Text>
             </View>
           )}
         </View>
@@ -307,22 +417,20 @@ export default function ProgressScreen() {
             </View>
           </ScrollView>
           {drillData ? (
-            <ChartViewport
-              scrollKey={`${activeMuscle}-${drillData.labels[drillData.labels.length - 1] || ''}-${drillData.labels.length}`}
-            >
-              <LineChart
-                data={drillData}
-                width={Math.max(W, drillData.labels.length * 64)}
-                height={180}
-                chartConfig={makeChartConfig(getMuscleColor(activeMuscle, muscleGroups.indexOf(activeMuscle)))}
-                bezier
-                style={{ borderRadius: 8 }}
-                withDots={true}
-                withInnerLines={true}
-                withOuterLines={false}
-                withShadow={false}
-              />
-            </ChartViewport>
+            <FixedAxisChart
+              data={drillData}
+              height={180}
+              decimalPlaces={0}
+              chartWidth={Math.max(
+                W - Y_AXIS_W,
+                drillData.labels.length * 64,
+              )}
+              scrollKey={`${activeMuscle}-${drillData.labels[drillData.labels.length - 1] || ""}-${drillData.labels.length}`}
+              chartConfig={makeChartConfig(
+                getMuscleColor(activeMuscle, muscleGroups.indexOf(activeMuscle)),
+              )}
+              showDots
+            />
           ) : (
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: t.textHint }]}>
@@ -336,26 +444,21 @@ export default function ProgressScreen() {
           <Text style={[s.cardTitle, { color: t.text }]}>Weight</Text>
           <Text style={[s.cardSub, { color: t.textSub }]}>Body weight over time (kg)</Text>
           {weightData ? (
-            <ChartViewport
-              scrollKey={`${weightData.labels[weightData.labels.length - 1] || ''}-${weightData.labels.length}`}
-            >
-              <LineChart
-                data={weightData}
-                width={Math.max(W, weightData.labels.length * 64)}
-                height={180}
-                chartConfig={{
-                  ...makeChartConfig('#A78BFA'),
-                  decimalPlaces: 1,
-                  yAxisSuffix: ' kg',
-                }}
-                bezier
-                style={{ borderRadius: 8 }}
-                withDots={true}
-                withInnerLines={true}
-                withOuterLines={false}
-                withShadow={false}
-              />
-            </ChartViewport>
+            <FixedAxisChart
+              data={weightData}
+              height={180}
+              decimalPlaces={1}
+              chartWidth={Math.max(
+                W - Y_AXIS_W,
+                weightData.labels.length * 64,
+              )}
+              scrollKey={`${weightData.labels[weightData.labels.length - 1] || ""}-${weightData.labels.length}`}
+              chartConfig={{
+                ...makeChartConfig(t.chartWeight),
+                yAxisSuffix: ' kg',
+              }}
+              showDots
+            />
           ) : (
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: t.textHint }]}>
@@ -382,38 +485,33 @@ export default function ProgressScreen() {
                     key={exercise}
                     style={[
                       s.chip,
-                      { borderColor: active ? '#F35D8A' : t.border, backgroundColor: active ? '#F35D8A22' : t.inputBg },
+                      { borderColor: active ? t.chartCardio : t.border, backgroundColor: active ? t.chartCardio + '22' : t.inputBg },
                     ]}
                     onPress={() => setSelectedCardioExercise(exercise)}
                   >
-                    <View style={[s.chipDot, { backgroundColor: '#F35D8A' }]} />
-                    <Text style={[s.chipText, { color: active ? '#F35D8A' : t.textSub, fontWeight: active ? '600' : '400' }]}>{exercise}</Text>
+                    <View style={[s.chipDot, { backgroundColor: t.chartCardio }]} />
+                    <Text style={[s.chipText, { color: active ? t.chartCardio : t.textSub, fontWeight: active ? '600' : '400' }]}>{exercise}</Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
           </ScrollView>
           {cardioData ? (
-            <ChartViewport
-              scrollKey={`${selectedCardioExercise}-${cardioData.labels[cardioData.labels.length - 1] || ''}-${cardioData.labels.length}`}
-            >
-              <LineChart
-                data={cardioData}
-                width={Math.max(W, cardioData.labels.length * 64)}
-                height={170}
-                chartConfig={{
-                  ...makeChartConfig('#F35D8A'),
-                  decimalPlaces: selectedCardioMetric === 'minutes' ? 0 : 1,
-                  yAxisSuffix: cardioIsSteps ? ' steps' : cardioIsDistance ? ' km/h' : ' min',
-                }}
-                bezier
-                style={{ borderRadius: 8 }}
-                withDots={true}
-                withInnerLines={true}
-                withOuterLines={false}
-                withShadow={false}
-              />
-            </ChartViewport>
+            <FixedAxisChart
+              data={cardioData}
+              height={170}
+              decimalPlaces={selectedCardioMetric === 'minutes' ? 0 : 1}
+              chartWidth={Math.max(
+                W - Y_AXIS_W,
+                cardioData.labels.length * 64,
+              )}
+              scrollKey={`${selectedCardioExercise}-${cardioData.labels[cardioData.labels.length - 1] || ""}-${cardioData.labels.length}`}
+              chartConfig={{
+                ...makeChartConfig(t.chartCardio),
+                yAxisSuffix: cardioIsSteps ? ' steps' : cardioIsDistance ? ' km/h' : ' min',
+              }}
+              showDots
+            />
           ) : (
             <View style={s.empty}>
               <Text style={[s.emptyText, { color: t.textHint }]}>Log at least 2 {selectedCardioExercise} sessions to see chart</Text>
@@ -481,5 +579,38 @@ const s = StyleSheet.create({
   chipDot: { width: 6, height: 6, borderRadius: 3 },
   chipText: { fontSize: 11 },
   empty: { height: 100, alignItems: 'center', justifyContent: 'center' },
-  emptyText: { fontSize: 12, textAlign: 'center', lineHeight: 18 },
+  emptyText: { fontSize: 12, textAlign: 'center', lineHeight: 18, fontWeight: '600' },
+  emptySubText: { fontSize: 11, textAlign: 'center', lineHeight: 16, marginTop: 4, maxWidth: 260 },
+  emptyIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  chartRow: { flexDirection: 'row', alignItems: 'stretch' },
+  yAxis: {
+    width: Y_AXIS_W,
+    borderRightWidth: 0.5,
+    position: 'relative',
+  },
+  tickWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 6,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    height: 14,
+  },
+  tickText: { fontSize: 9, fontVariant: ['tabular-nums'] },
+  plotWrap: { flex: 1, position: 'relative' },
+  plot: { width: '100%', height: '100%' },
+  gridLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 0.5,
+  },
 });

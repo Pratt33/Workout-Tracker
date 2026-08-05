@@ -26,6 +26,7 @@ import {
   applyCardioConfigToPlan,
   isCardioExercise,
   isWeightExercise,
+  getCardioEntry,
 } from "../app/data";
 import {
   loadSessions,
@@ -114,6 +115,9 @@ function AnimatedExRow({ ex, isDone, onPress, onEdit, index, t }) {
             { borderColor: t.border, backgroundColor: t.inputBg },
           ]}
           onPress={onEdit}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={`Edit ${ex}`}
         >
           <Text style={[s.editBtnText, { color: t.textSub }]}>Edit</Text>
         </TouchableOpacity>
@@ -191,15 +195,18 @@ export default function DayLogger({
     setCardioConfig(savedCardioConfig || DEFAULT_CARDIO_CONFIG);
     const customPlan = await loadCustomPlan();
     const restDays = await loadRestDays();
+    const overrides = await loadDayOverrides();
+    const todayOverride = overrides[dateKey] ?? null;
+
     let effectiveDowLocal = dow;
-    if (!isPastLog) {
-      const overrides = await loadDayOverrides();
-      const todayOverride = overrides[dateKey] ?? null;
-      setDayOverride(todayOverride);
-      effectiveDowLocal = todayOverride !== null ? todayOverride : dow;
-    } else {
-      setDayOverride(null);
+    if (todayOverride !== null) {
+      effectiveDowLocal = todayOverride;
+    } else if (loadedSessions[dateKey]?._dow !== undefined) {
+      effectiveDowLocal = loadedSessions[dateKey]._dow;
     }
+
+    setDayOverride(todayOverride !== null ? todayOverride : (loadedSessions[dateKey]?._dow !== undefined ? loadedSessions[dateKey]._dow : null));
+
     if (!loadedSessions[dateKey])
       loadedSessions[dateKey] = { _dow: effectiveDowLocal };
     else
@@ -207,9 +214,10 @@ export default function DayLogger({
         ...loadedSessions[dateKey],
         _dow: effectiveDowLocal,
       };
+
     const nextPlan =
       customPlan && typeof customPlan === "object" ? customPlan : DEFAULT_PLAN;
-    const restStatus = !!restDays[dateKey];
+    const restStatus = !!restDays[dateKey] || !!loadedSessions[dateKey]?._rest;
     setSessions({ ...loadedSessions });
     const liveConfig = savedCardioConfig || DEFAULT_CARDIO_CONFIG;
     setPlan(applyCardioConfigToPlan(nextPlan, liveConfig));
@@ -270,10 +278,18 @@ export default function DayLogger({
   );
 
   const openLogger = (ex) => {
-    const current = sessions[dateKey]?.[ex];
+    const isCardio = isCardioExercise(ex, cardioConfig);
+    const storageKey = isCardio ? (getCardioEntry(ex, cardioConfig)?.id || ex) : ex;
+    let current = sessions[dateKey]?.[storageKey];
+    if (current === undefined && isCardio) {
+      const entry = getCardioEntry(ex, cardioConfig);
+      if (entry && sessions[dateKey]?.[entry.name] !== undefined) {
+        current = sessions[dateKey][entry.name];
+      }
+    }
     setActiveEx(ex);
 
-    if (isCardioExercise(ex, cardioConfig)) {
+    if (isCardio) {
       setActiveSets([]);
       setCardioMinutes(
         current && typeof current === "object"
@@ -297,17 +313,12 @@ export default function DayLogger({
         current && typeof current === "object" ? String(current.kg ?? "") : "",
       );
     } else {
-      const localRenames = sessions[dateKey]?._localRenames || {};
-      const reverseRenames = {};
-      Object.entries(localRenames).forEach(([orig, renamed]) => {
-        reverseRenames[renamed] = orig;
-      });
-      // Look up past sessions using original name so prefill works across renames
-      const originalName = reverseRenames[ex] || ex;
+      // `ex` is already the storage name (renames are resolved during render),
+      // so prefill from the most recent logged sets for this same exercise.
       const latestResult =
         Array.isArray(current) && current.length > 0
           ? { sets: current, dateKey }
-          : getLatestExerciseSets(sessions, originalName, dateKey);
+          : getLatestExerciseSets(sessions, ex, dateKey);
       const latestSets =
         Array.isArray(latestResult?.sets) && latestResult.sets.length > 0
           ? latestResult.sets
@@ -355,11 +366,21 @@ export default function DayLogger({
       ...(nextSessions[dateKey] || {}),
       _dow: effectiveDow,
     };
-    nextSessions[dateKey][activeEx] = isCardioExercise(activeEx, cardioConfig)
+    
+    const isCardio = isCardioExercise(activeEx, cardioConfig);
+    const storageKey = isCardio 
+      ? (getCardioEntry(activeEx, cardioConfig)?.id || activeEx) 
+      : activeEx;
+
+    nextSessions[dateKey][storageKey] = isCardio
       ? { minutes: cardioMinutes, km: cardioKm, steps: cardioSteps }
       : isWeightExercise(activeEx)
         ? { kg: weightKg }
         : normalizeWorkoutSets(activeSets);
+
+    if (isCardio && storageKey !== activeEx) {
+      delete nextSessions[dateKey][activeEx];
+    }
 
     await saveSessions(nextSessions);
     setSessions(nextSessions);
@@ -368,7 +389,8 @@ export default function DayLogger({
 
   const startEditingExercise = (groupIndex, exerciseIndex, ex) => {
     setEditingEx({ groupIndex, exerciseIndex, oldName: ex });
-    setEditingName(ex);
+    const renames = sessions[dateKey]?._localRenames || {};
+    setEditingName(renames[ex] || ex);
   };
 
   const cancelEditingExercise = () => {
@@ -397,20 +419,40 @@ export default function DayLogger({
       return;
     }
 
-    const oldName = editingEx.oldName;
+    const planName = editingEx.oldName;
     const nextSessions = { ...sessions };
     if (!nextSessions[dateKey]) nextSessions[dateKey] = { _dow: dow };
 
-    const renamedSessions = renameExerciseInSessions(nextSessions, oldName, trimmed);
+    // A previous rename already moved this exercise's data off the plan name,
+    // so always relocate from the *current* stored key. Otherwise a second
+    // rename would orphan the data (the old key no longer exists).
+    const currentRenames = nextSessions[dateKey]?._localRenames || {};
+    const currentKey = currentRenames[planName] || planName;
+
+    const renamedSessions = renameExerciseInSessions(nextSessions, currentKey, trimmed);
     const persistedSessions = renamedSessions.changed ? renamedSessions.sessions : nextSessions;
 
-    const currentSession = persistedSessions[dateKey] || { _dow: effectiveDow };
-    const renames = currentSession._localRenames
-      ? { ...currentSession._localRenames }
-      : {};
-    renames[oldName] = trimmed;
-    currentSession._localRenames = renames;
-    persistedSessions[dateKey] = currentSession;
+    // Rebuild set-based exercise renames as a per-session map so every date
+    // (past and future) resolves the renamed key identically. Cardio and body
+    // weight entries are keyed by config id / fixed name, so they must not be
+    // run through the plain rename map — resolving them would silently
+    // disconnect them from their stored data.
+    const renameAsSets =
+      !isCardioExercise(planName, cardioConfig) && !isWeightExercise(planName);
+    if (renameAsSets) {
+      if (!persistedSessions[dateKey]) {
+        persistedSessions[dateKey] = { _dow: effectiveDow };
+      }
+      Object.keys(persistedSessions).forEach((k) => {
+        const day = persistedSessions[k];
+        if (!day || typeof day !== "object" || Array.isArray(day)) return;
+        const renames = day._localRenames
+          ? { ...day._localRenames }
+          : {};
+        renames[planName] = trimmed;
+        persistedSessions[k] = { ...day, _localRenames: renames };
+      });
+    }
 
     await saveSessions(persistedSessions);
     setSessions(persistedSessions);
@@ -427,11 +469,19 @@ export default function DayLogger({
         (sum, set) => sum + (parseFloat(set.w) || 0) * (parseInt(set.r) || 0),
         0,
       );
-  const showRestView = isRestDay || !day;
+  const showRestView = (isRestDay && showRestBanner) || !day;
 
   const isExerciseDone = (ex) => {
-    const entry = sessions[dateKey]?.[ex];
-    if (isCardioExercise(ex, cardioConfig) || isWeightExercise(ex))
+    const isCardio = isCardioExercise(ex, cardioConfig);
+    const storageKey = isCardio ? (getCardioEntry(ex, cardioConfig)?.id || ex) : ex;
+    let entry = sessions[dateKey]?.[storageKey];
+    if (entry === undefined && isCardio) {
+      const cardioEntry = getCardioEntry(ex, cardioConfig);
+      if (cardioEntry && sessions[dateKey]?.[cardioEntry.name] !== undefined) {
+        entry = sessions[dateKey][cardioEntry.name];
+      }
+    }
+    if (isCardio || isWeightExercise(ex))
       return !!entry;
     return Array.isArray(entry) && entry.length > 0;
   };
@@ -457,6 +507,9 @@ export default function DayLogger({
               s.restClose,
               { backgroundColor: t.inputBg, borderColor: t.border },
             ]}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss rest reminder"
           >
             <Ionicons name="close" size={16} color={t.textSub} />
           </TouchableOpacity>
@@ -588,6 +641,9 @@ export default function DayLogger({
                       s.closeBtn,
                       { backgroundColor: t.inputBg, borderColor: t.border },
                     ]}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Close"
                   >
                     <Ionicons name="close" size={16} color={t.textSub} />
                   </TouchableOpacity>
@@ -884,6 +940,9 @@ export default function DayLogger({
                 { backgroundColor: t.inputBg, borderColor: t.border },
               ]}
               onPress={() => setSettingsVisible(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel="Open settings"
             >
               <GearIcon color={t.textSub} size={18} />
             </TouchableOpacity>
@@ -1000,6 +1059,7 @@ export default function DayLogger({
         }}
         onChanged={loadScreenData}
         theme={t}
+        dateKey={dateKey}
       />
     </SafeAreaView>
   );
@@ -1058,8 +1118,10 @@ const s = StyleSheet.create({
   editBtn: {
     borderWidth: 0.5,
     borderRadius: 7,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 40,
+    justifyContent: "center",
   },
   editBtnText: { fontSize: 11, fontWeight: "500" },
   check: {

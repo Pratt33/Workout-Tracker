@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
+import AppLogo from "./AppLogo";
 import { PLAN, PLAN_VERSION, DEFAULT_CARDIO_CONFIG } from "./data";
 import {
   todayKey,
@@ -25,6 +26,10 @@ import {
   saveSessions,
   renameExerciseInSessions,
   saveRestDay,
+  loadRestDays,
+  loadCustomPlan,
+  saveCustomPlan,
+  clearCustomPlan,
 } from "./storage";
 
 const REST_KEY = "rest_days_v1";
@@ -57,58 +62,56 @@ function clonePlan(plan) {
   return JSON.parse(JSON.stringify(plan));
 }
 
-async function loadRestDays() {
-  try {
-    const raw = await AsyncStorage.getItem(REST_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
+const MENU_ITEMS = [
+  {
+    id: "workout",
+    title: "Workout Settings",
+    subtitle: "Replace a scheduled workout day",
+    icon: "calendar-outline",
+  },
+  {
+    id: "restday",
+    title: "Rest Day",
+    subtitle: "Mark a day as rest",
+    icon: "moon-outline",
+  },
+  {
+    id: "cardio",
+    title: "Cardio Settings",
+    subtitle: "Manage cardio exercises & metrics",
+    icon: "heart-outline",
+  },
+  {
+    id: "exercises",
+    title: "Exercise Management",
+    subtitle: "Edit workout exercises by day",
+    icon: "barbell-outline",
+  },
+  {
+    id: "about",
+    title: "About",
+    subtitle: "App version & info",
+    icon: "information-circle-outline",
+  },
+];
 
-async function saveRestDays(restDays) {
-  try {
-    await AsyncStorage.setItem(REST_KEY, JSON.stringify(restDays));
-  } catch {}
-}
-
-async function loadCustomExercises() {
-  try {
-    const raw = await AsyncStorage.getItem(CUSTOM_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return null;
-    if (parsed._planVersion !== PLAN_VERSION) return null;
-    return parsed.plan || null;
-  } catch {
-    return null;
-  }
-}
-
-async function saveCustomExercises(plan) {
-  try {
-    await AsyncStorage.setItem(
-      CUSTOM_KEY,
-      JSON.stringify({
-        _planVersion: PLAN_VERSION,
-        plan,
-      }),
-    );
-  } catch {}
-}
-
-async function clearCustomExercises() {
-  try {
-    await AsyncStorage.removeItem(CUSTOM_KEY);
-  } catch {}
-}
+const VIEW_TITLES = {
+  menu: "Settings",
+  workout: "Workout Settings",
+  restday: "Rest Day",
+  cardio: "Cardio Settings",
+  exercises: "Exercise Management",
+  about: "About",
+};
 
 export default function SettingsModal({
   visible,
   onClose,
   onChanged,
   theme: t,
+  dateKey = todayKey(),
 }) {
+  const [view, setView] = useState("menu");
   const [todayRest, setTodayRest] = useState(false);
   const [expandedDays, setExpandedDays] = useState({});
   const [plan, setPlan] = useState(clonePlan(PLAN));
@@ -126,15 +129,17 @@ export default function SettingsModal({
     if (!visible) return;
 
     let active = true;
+    setView("menu");
     Promise.all([
       loadRestDays(),
-      loadCustomExercises(),
+      loadCustomPlan(),
       loadDayOverrides(),
       loadCardioConfig(),
     ]).then(([restDays, customPlan, overrides, savedCardio]) => {
       if (!active) return;
-      setTodayRest(!!restDays[todayKey()]?.isRest);
-      setDayOverride(overrides[todayKey()] ?? null);
+      const storedRest = restDays[dateKey];
+      setTodayRest(!!storedRest && (storedRest === true || storedRest.isRest === true));
+      setDayOverride(overrides[dateKey] ?? null);
       setPlan(
         customPlan && typeof customPlan === "object"
           ? customPlan
@@ -148,27 +153,28 @@ export default function SettingsModal({
     return () => {
       active = false;
     };
-  }, [visible]);
+  }, [visible, dateKey]);
 
   const persistPlan = async (nextPlan) => {
     setPlan(nextPlan);
-    await saveCustomExercises(nextPlan);
+    await saveCustomPlan(nextPlan);
   };
 
   const toggleTodayRest = async (value) => {
     setTodayRest(value);
-    await saveRestDay(todayKey(), value);
+    await saveRestDay(dateKey, value);
+    if (onChanged) await onChanged();
   };
 
   const selectDayOverride = async (dow) => {
-    const key = todayKey();
+    const key = dateKey;
     await saveDayOverride(key, dow);
     setDayOverride(dow);
     if (onChanged) await onChanged();
   };
 
   const clearDayOverride = async () => {
-    const key = todayKey();
+    const key = dateKey;
     await saveDayOverride(key, null);
     setDayOverride(null);
     if (onChanged) await onChanged();
@@ -187,7 +193,7 @@ export default function SettingsModal({
   };
 
   const resetToDefaults = async () => {
-    await clearCustomExercises();
+    await clearCustomPlan();
     setPlan(clonePlan(PLAN));
     if (onChanged) await onChanged();
   };
@@ -219,7 +225,14 @@ export default function SettingsModal({
   };
 
   const addCardioExercise = () => {
-    setCardioEdits((prev) => [...prev, { name: "", metric: "minutes" }]);
+    setCardioEdits((prev) => [
+      ...prev,
+      {
+        id: `cardio_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        name: "",
+        metric: "minutes",
+      },
+    ]);
   };
 
   const removeCardioExercise = (index) => {
@@ -248,9 +261,32 @@ export default function SettingsModal({
       Alert.alert("Empty name", "All cardio exercises must have a name.");
       return;
     }
+
+    const oldNames = cardioConfig.map((c) => c.name);
+    const newNames = cardioEdits.map((c) => c.name.trim());
+
+    let migratedSessions = null;
+    for (let i = 0; i < Math.min(oldNames.length, newNames.length); i++) {
+      if (oldNames[i] !== newNames[i] && oldNames[i] && newNames[i]) {
+        if (!migratedSessions) {
+          migratedSessions = await loadSessions();
+        }
+        const result = renameExerciseInSessions(
+          migratedSessions,
+          oldNames[i],
+          newNames[i],
+        );
+        if (result.changed) migratedSessions = result.sessions;
+      }
+    }
+    if (migratedSessions) {
+      await saveSessions(migratedSessions);
+    }
+
     const nextConfig = cardioEdits
       .map((entry) => {
         const trimmed = {
+          id: entry.id || `cardio_${entry.name.trim().toLowerCase().replace(/[^a-z0-9]/g, "_")}_${Date.now()}`,
           name: entry.name.trim(),
           metric: entry.metric,
         };
@@ -260,26 +296,6 @@ export default function SettingsModal({
         return trimmed;
       })
       .filter((entry) => entry.name);
-
-    let migratedSessions = null;
-    for (const entry of cardioEdits) {
-      const oldName = entry.originalName;
-      const newName = entry.name.trim();
-      if (oldName && newName && oldName !== newName) {
-        if (!migratedSessions) {
-          migratedSessions = await loadSessions();
-        }
-        const result = renameExerciseInSessions(
-          migratedSessions,
-          oldName,
-          newName,
-        );
-        if (result.changed) migratedSessions = result.sessions;
-      }
-    }
-    if (migratedSessions) {
-      await saveSessions(migratedSessions);
-    }
 
     await saveCardioConfig(nextConfig);
     setCardioConfig(nextConfig);
@@ -303,7 +319,7 @@ export default function SettingsModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <View style={s.overlay}>
+      <View style={[s.overlay, { backgroundColor: t.scrim }]}>
         <TouchableOpacity
           style={StyleSheet.absoluteFill}
           activeOpacity={1}
@@ -320,7 +336,23 @@ export default function SettingsModal({
           </View>
 
           <View style={[s.header, { borderBottomColor: t.border }]}>
-            <Text style={[s.title, { color: t.text }]}>Settings</Text>
+            <View style={s.headerLeft}>
+              {view !== "menu" && (
+                <TouchableOpacity
+                  onPress={() => setView("menu")}
+                  style={[
+                    s.backBtn,
+                    { backgroundColor: t.inputBg, borderColor: t.border },
+                  ]}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="chevron-back" size={18} color={t.text} />
+                </TouchableOpacity>
+              )}
+              <Text style={[s.title, { color: t.text }]}>
+                {VIEW_TITLES[view] || "Settings"}
+              </Text>
+            </View>
             <TouchableOpacity
               onPress={onClose}
               style={[
@@ -338,6 +370,53 @@ export default function SettingsModal({
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
+            {view === "menu" && (
+              <View
+                style={[
+                  s.menu,
+                  { borderColor: t.border, backgroundColor: t.surface },
+                ]}
+              >
+                {MENU_ITEMS.map((item, index) => (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[
+                      s.menuRow,
+                      index > 0 && {
+                        borderTopWidth: 0.5,
+                        borderTopColor: t.border,
+                      },
+                    ]}
+                    onPress={() => setView(item.id)}
+                    activeOpacity={0.7}
+                  >
+                    <View
+                      style={[
+                        s.menuIcon,
+                        { backgroundColor: t.inputBg, borderColor: t.border },
+                      ]}
+                    >
+                      <Ionicons name={item.icon} size={18} color={t.accent} />
+                    </View>
+                    <View style={s.menuText}>
+                      <Text style={[s.menuTitle, { color: t.text }]}>
+                        {item.title}
+                      </Text>
+                      <Text style={[s.menuSub, { color: t.textSub }]}>
+                        {item.subtitle}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color={t.textHint}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {view === "restday" && (
             <View
               style={[
                 s.section,
@@ -349,7 +428,7 @@ export default function SettingsModal({
               </Text>
               <View style={[s.row, { borderTopColor: t.border }]}>
                 <Text style={[s.rowText, { color: t.text }]}>
-                  Mark today as rest day
+                  {dateKey === todayKey() ? "Mark today as rest day" : "Mark this day as rest day"}
                 </Text>
                 <Switch
                   value={todayRest}
@@ -359,7 +438,9 @@ export default function SettingsModal({
                 />
               </View>
             </View>
+            )}
 
+            {view === "workout" && (
             <View
               style={[
                 s.section,
@@ -367,7 +448,7 @@ export default function SettingsModal({
               ]}
             >
               <Text style={[s.sectionTitle, { color: t.text }]}>
-                Replace Today's Day
+                {dateKey === todayKey() ? "Replace Today's Day" : "Replace Day's Workout"}
               </Text>
               <View style={s.overrideWrap}>
                 {DAY_OPTIONS.map((option) => {
@@ -409,7 +490,7 @@ export default function SettingsModal({
                 >
                   {dayOverride !== null
                     ? DAY_OPTIONS.find((option) => option.dow === dayOverride)
-                        ?.label
+                      ?.label
                     : "None"}
                 </Text>
               </View>
@@ -425,7 +506,9 @@ export default function SettingsModal({
                 </Text>
               </TouchableOpacity>
             </View>
+            )}
 
+            {view === "cardio" && (
             <View
               style={[
                 s.section,
@@ -635,7 +718,9 @@ export default function SettingsModal({
                 </>
               )}
             </View>
+            )}
 
+            {view === "exercises" && (
             <View
               style={[
                 s.section,
@@ -736,6 +821,43 @@ export default function SettingsModal({
                 </Text>
               </TouchableOpacity>
             </View>
+            )}
+
+            {view === "about" && (
+              <View
+                style={[
+                  s.section,
+                  { borderColor: t.border, backgroundColor: t.surface },
+                ]}
+              >
+                <View style={s.aboutHeader}>
+                  <AppLogo theme={t} />
+                </View>
+                <View style={[s.aboutRow, { borderTopColor: t.border }]}>
+                  <Text style={[s.aboutLabel, { color: t.textSub }]}>
+                    Version
+                  </Text>
+                  <Text style={[s.aboutValue, { color: t.text }]}>v4.3</Text>
+                </View>
+                <View style={[s.aboutRow, { borderTopColor: t.border }]}>
+                  <Text style={[s.aboutLabel, { color: t.textSub }]}>
+                    Release
+                  </Text>
+                  <Text style={[s.aboutValue, { color: t.text }]}>
+                    Settings redesign
+                  </Text>
+                </View>
+                <Text
+                  style={[
+                    s.aboutFooter,
+                    { color: t.textSub, borderTopColor: t.border },
+                  ]}
+                >
+                  A practical workout logging app for consistency and
+                  progression tracking.
+                </Text>
+              </View>
+            )}
           </ScrollView>
         </View>
       </View>
@@ -746,7 +868,6 @@ export default function SettingsModal({
 const s = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "flex-end",
   },
   sheet: {
@@ -775,6 +896,15 @@ const s = StyleSheet.create({
     borderBottomWidth: 0.5,
   },
   title: { fontSize: 18, fontWeight: "600" },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
+  backBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 0.5,
+  },
   closeBtn: {
     width: 32,
     height: 32,
@@ -985,4 +1115,52 @@ const s = StyleSheet.create({
     marginTop: 2,
   },
   resetText: { fontSize: 13, fontWeight: "600" },
+  menu: {
+    borderWidth: 0.5,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  menuRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 12,
+    borderTopWidth: 0,
+  },
+  menuIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    borderWidth: 0.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuText: { flex: 1 },
+  menuTitle: { fontSize: 14, fontWeight: "600" },
+  menuSub: { fontSize: 12, marginTop: 2 },
+  aboutHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 18,
+  },
+  aboutRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderTopWidth: 0.5,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  aboutLabel: { fontSize: 13, fontWeight: "500" },
+  aboutValue: { fontSize: 13, fontWeight: "600" },
+  aboutFooter: {
+    fontSize: 12,
+    lineHeight: 17,
+    borderTopWidth: 0.5,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 14,
+  },
 });

@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { PLAN_VERSION } from "./data";
+import { PLAN_VERSION, getCardioEntry, DEFAULT_CARDIO_CONFIG } from "./data";
 import { normalizeWorkoutSets } from "./workoutSets";
 
 const KEY = "workout_sessions_v1";
@@ -74,9 +74,25 @@ export async function loadSessions() {
   try {
     const raw = await AsyncStorage.getItem(KEY);
     const parsed = raw ? JSON.parse(raw) : {};
+    
+    const cardioConfig = await loadCardioConfig() || DEFAULT_CARDIO_CONFIG;
     const { sessions, changed } = migrateLegacyExerciseNames(parsed);
+    
+    let cardioMigrated = false;
+    Object.keys(sessions).forEach((k) => {
+      const day = sessions[k];
+      if (!day || typeof day !== "object" || Array.isArray(day)) return;
+      cardioConfig.forEach((c) => {
+        if (day[c.name] !== undefined && c.id && c.name !== c.id) {
+          day[c.id] = day[c.name];
+          delete day[c.name];
+          cardioMigrated = true;
+        }
+      });
+    });
+
     const normalized = normalizeSessionsMap(sessions);
-    if (changed || JSON.stringify(normalized) !== JSON.stringify(sessions)) {
+    if (changed || cardioMigrated || JSON.stringify(normalized) !== JSON.stringify(sessions)) {
       await AsyncStorage.setItem(KEY, JSON.stringify(normalized));
     }
     return normalized;
@@ -161,13 +177,22 @@ export function getMuscleVolume(sessionData, muscleName, dayPlan) {
   return Math.round(vol);
 }
 
-export function getCardioMinutes(sessionData, dayPlan) {
+export function getCardioMinutes(
+  sessionData,
+  dayPlan,
+  cardioConfig = DEFAULT_CARDIO_CONFIG,
+) {
   if (!sessionData || !dayPlan) return 0;
   let mins = 0;
   dayPlan.groups.forEach((g) => {
     if (g.name !== "Cardio") return;
     g.exercises.forEach((ex) => {
-      const entry = sessionData[ex];
+      const config = getCardioEntry(ex, cardioConfig);
+      const storageKey = config ? config.id : ex;
+      let entry = sessionData[storageKey];
+      if (entry === undefined && config && sessionData[config.name] !== undefined) {
+        entry = sessionData[config.name];
+      }
       if (Array.isArray(entry)) {
         entry.forEach((s) => {
           mins += parseFloat(s.m) || 0;
@@ -280,7 +305,8 @@ export function buildLLMExportPayload(sessions, planMap) {
 
     day.groups.forEach((g) => {
       g.exercises.forEach((ex) => {
-        const sets = Array.isArray(session[ex]) ? session[ex] : [];
+        const storageKey = session._localRenames?.[ex] || ex;
+        const sets = Array.isArray(session[storageKey]) ? session[storageKey] : [];
         if (sets.length === 0) return;
         touched.add(g.name);
         normalizeWorkoutSets(sets).forEach((set) => {
@@ -422,6 +448,24 @@ export async function loadCustomPlan() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
+
+    if (parsed._planVersion === 1 && PLAN_VERSION === 2) {
+      const plan = parsed.plan;
+      if (plan && plan[6] && plan[6].groups) {
+        const shoulders = plan[6].groups.find((g) => g.name === "Shoulders");
+        if (shoulders && shoulders.exercises.length < 3) {
+          shoulders.exercises.push("Dumbbell Shrugs");
+        }
+        const legs = plan[6].groups.find((g) => g.name === "Legs");
+        if (legs && legs.exercises.length < 2) {
+          legs.exercises.push("Romanian Deadlifts");
+        }
+        parsed._planVersion = 2;
+        await saveCustomPlan(plan);
+      }
+      return plan;
+    }
+
     if (parsed._planVersion !== PLAN_VERSION) return null;
     return parsed.plan || null;
   } catch {
@@ -476,6 +520,24 @@ export async function saveRestDay(dateKey, isRest) {
     if (isRest) days[dateKey] = true;
     else delete days[dateKey];
     await AsyncStorage.setItem("rest_days_v1", JSON.stringify(days));
+
+    const rawSessions = await AsyncStorage.getItem(KEY);
+    const sessions = rawSessions ? JSON.parse(rawSessions) : {};
+    if (isRest) {
+      if (!sessions[dateKey]) {
+        sessions[dateKey] = {};
+      }
+      sessions[dateKey]._rest = true;
+    } else {
+      if (sessions[dateKey]) {
+        delete sessions[dateKey]._rest;
+        const keys = Object.keys(sessions[dateKey]).filter((k) => !k.startsWith("_"));
+        if (keys.length === 0) {
+          delete sessions[dateKey];
+        }
+      }
+    }
+    await AsyncStorage.setItem(KEY, JSON.stringify(sessions));
   } catch {}
 }
 
@@ -498,7 +560,7 @@ export async function loadDayOverrides() {
   }
 }
 
-export function buildCSVExport(sessions, planMap) {
+export function buildCSVExport(sessions, planMap, cardioConfig) {
   const rows = [];
   rows.push(
     [
@@ -532,11 +594,22 @@ export function buildCSVExport(sessions, planMap) {
 
     day.groups.forEach((g) => {
       g.exercises.forEach((ex) => {
-        const entry = session[ex];
+        const isCardio = g.name === "Cardio";
+        const storageKey = isCardio 
+          ? (getCardioEntry(ex, cardioConfig)?.id || ex) 
+          : (session._localRenames?.[ex] || ex);
+        
+        let entry = session[storageKey];
+        if (entry === undefined && isCardio) {
+          const entryConfig = getCardioEntry(ex, cardioConfig);
+          if (entryConfig && session[entryConfig.name] !== undefined) {
+            entry = session[entryConfig.name];
+          }
+        }
         if (!entry) return;
 
         if (
-          g.name === "Cardio" &&
+          isCardio &&
           typeof entry === "object" &&
           !Array.isArray(entry)
         ) {
@@ -619,7 +692,22 @@ export async function loadCardioConfig() {
     const raw = await AsyncStorage.getItem(CARDIO_CONFIG_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      let migrated = false;
+      const next = parsed.map((item) => {
+        if (!item.id) {
+          migrated = true;
+          const defaultMap = { "Walking": "walking", "Cycling": "cycling", "Plank": "plank" };
+          item.id = defaultMap[item.name] || `cardio_${item.name.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${Date.now()}`;
+        }
+        return item;
+      });
+      if (migrated) {
+        await saveCardioConfig(next);
+      }
+      return next;
+    }
+    return null;
   } catch {
     return null;
   }
