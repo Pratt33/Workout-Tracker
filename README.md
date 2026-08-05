@@ -1,4 +1,4 @@
-# Workout Tracker v4.3
+# Workout Tracker v5.1
 
 A practical workout logging app focused on consistency, progression tracking, and LLM-ready insights.
 
@@ -20,13 +20,15 @@ Goals:
 - LLM-ready export with annotations and derived metrics.
 - Rest-day declaration (including missed-day marking).
 
-## Version 4.3 (Release)
+## Version 5.1 (Release)
 
-This release (v4.3) includes:
-- **Pinned Y-Axis on Charts**: Pinned Y-axis labels to the left of chart containers so they remain visible while swiping/scrolling data horizontally.
-- **Progress Screen UI Cleanup**: Removed redundant date/weight entry cards in the body weight tracking section to keep the focus solely on the chart visualization.
-- **Rest-Day Crash Fix**: Resolved a critical null-pointer crash in `DayLogger` when accessing the application on scheduled rest days (such as Sundays).
-- **v4.2 Features**: Dynamic chart orientation-scaling, settings modal scroll persistence, and robust cardio rename migrations.
+This release (v5.1) covers the v5.x line of work:
+
+- **Data Consistency Fixes**: Exercise renames now persist across *all* sessions, so renamed exercises keep their full history in Progress, History, and exports. Fixed consecutive-rename orphaned data, cardio minute tracking, and exports dropping renamed rows.
+- **Settings Redesign**: Settings now uses a proper menu with navigation (workout plan, cardio config, data, rest days, about) instead of one long scroll.
+- **Pinned Y-Axis on Charts**: Y-axis labels stay fixed while swiping data horizontally on every Progress chart.
+- **UI/UX Polish & Design System**: Added a central design-token system (semantic colors, chart palette, spacing/radius/type scales), refined empty states, consistent touch targets, and accessibility labels. Tighter, balanced Home-screen layout with correct cross-platform row alignment.
+- **v4.3 Earlier**: Rest-day crash fix, progress-screen cleanup, and dynamic chart orientation-scaling.
 
 ## Main Challenges Faced
 - Keeping the data model simple but flexible.
@@ -58,9 +60,9 @@ This release (v4.3) includes:
 - react-native-safe-area-context
 
 ## App Download Link
-Android build (v4.3):
-- Build details: https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/bf1d7853-bb8a-47d2-afa2-e415c2f6d884
-- Direct AAB: https://expo.dev/artifacts/eas/_y_rF_easX-4qSPT8eCNhQgLG94YotXDNmw7QrCK6kQ.aab
+Android build (v5.1):
+- Build details: https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/7a3e1da6-bd79-4f62-b194-e5eea1d7f456
+- Direct AAB: https://expo.dev/artifacts/eas/gHuxWR7KTI3PLZtGLJJSxhOHirRMdT-nF2miL7K68z8.aab
 
 ## Future Improvements
 - Personal best tracking and milestones.

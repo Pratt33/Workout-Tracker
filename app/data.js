@@ -86,8 +86,8 @@ export const PLAN = {
         color: "#2DBF8E",
         exercises: [
           "Barbell Row",
-          "Lat Pulldown",
-          "Face Pulls",
+          "Lat Pulldown (Wide Grip)",
+          "Single-Arm Dumbbell Row",
         ],
       },
       {
@@ -105,12 +105,12 @@ export const PLAN = {
       {
         name: "Shoulders",
         color: "#E8B84A",
-        exercises: ["Barbell Overhead Press", "Cable Lateral Raise"],
+        exercises: ["Seated Barbell Overhead Press", "Cable Lateral Raise"],
       },
       {
         name: "Legs",
         color: "#7ABF3A",
-        exercises: ["Leg Press", "Leg Curl", "Leg Extension"],
+        exercises: ["Leg Press", "Seated Leg Curl", "Leg Extension"],
       },
       CARDIO_GROUP,
       WEIGHT_GROUP,
@@ -148,8 +148,8 @@ export const PLAN = {
         color: "#2DBF8E",
         exercises: [
           "T-Bar Row",
-          "Single-Arm Dumbbell Row",
-          "Straight-Arm Pulldown",
+          "Lat Pulldown (Neutral Grip)",
+          "Straight-Arm Cable Pulldown",
         ],
       },
       {
@@ -170,7 +170,7 @@ export const PLAN = {
         exercises: [
           "Dumbbell Lateral Raise",
           "Cable Rear Delt Fly",
-          "Dumbbell Shrugs",
+          "Face Pull",
         ],
       },
       {

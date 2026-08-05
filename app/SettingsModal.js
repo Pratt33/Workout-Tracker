@@ -837,14 +837,14 @@ export default function SettingsModal({
                   <Text style={[s.aboutLabel, { color: t.textSub }]}>
                     Version
                   </Text>
-                  <Text style={[s.aboutValue, { color: t.text }]}>v4.3</Text>
+                  <Text style={[s.aboutValue, { color: t.text }]}>v5.1</Text>
                 </View>
                 <View style={[s.aboutRow, { borderTopColor: t.border }]}>
                   <Text style={[s.aboutLabel, { color: t.textSub }]}>
                     Release
                   </Text>
                   <Text style={[s.aboutValue, { color: t.text }]}>
-                    Settings redesign
+                    UI polish & data consistency
                   </Text>
                 </View>
                 <Text
@@ -853,8 +853,8 @@ export default function SettingsModal({
                     { color: t.textSub, borderTopColor: t.border },
                   ]}
                 >
-                  A practical workout logging app for consistency and
-                  progression tracking.
+                  A practical workout logging app for consistency, progression
+                  tracking, and LLM-ready insights.
                 </Text>
               </View>
             )}
