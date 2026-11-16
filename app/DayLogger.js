@@ -20,13 +20,14 @@ import { useTheme } from "../app/theme";
 import AppLogo from "../app/AppLogo";
 import CardioLogger from "./CardioLogger";
 import SettingsModal from "./SettingsModal";
+import SetInputs from "./SetInputs";
 import {
-  PLAN as DEFAULT_PLAN,
+  DEFAULT_PLAN,
   DEFAULT_CARDIO_CONFIG,
   applyCardioConfigToPlan,
-  isCardioExercise,
-  isWeightExercise,
   getCardioEntry,
+  getWorkoutById,
+  isWeightExercise,
 } from "../app/data";
 import {
   loadSessions,
@@ -37,11 +38,43 @@ import {
   loadRestDays,
   loadDayOverrides,
   loadCardioConfig,
-  renameExerciseInSessions,
+  loadCatalog,
+  renameExerciseGlobally,
+  saveRestDay,
 } from "../app/storage";
-import { createWorkoutSets, normalizeWorkoutSets } from "./workoutSets";
+import { findExerciseInPlan } from "../app/planUtils";
+import {
+  getExerciseTracking,
+  isTimedExercise,
+} from "../app/catalog";
+import {
+  getNextWorkoutId,
+  getWorkoutForDate,
+  getWorkoutOrdinal,
+} from "../app/schedule";
+import {
+  getCardioStorageKey,
+  getSessionEntry,
+  hasCardioValues,
+  isEntryLogged,
+  normalizeCardioValues,
+} from "../app/sessionUtils";
+import {
+  cleanWorkoutSets,
+  createWorkoutSets,
+  normalizeWorkoutSets,
+} from "./workoutSets";
 
-function AnimatedExRow({ ex, isDone, onPress, onEdit, index, t }) {
+function AnimatedExRow({
+  ex,
+  isDone,
+  timed,
+  canEdit,
+  onPress,
+  onEdit,
+  index,
+  t,
+}) {
   const anim = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(1)).current;
   const checkScale = useRef(new Animated.Value(isDone ? 1 : 0)).current;
@@ -109,18 +142,28 @@ function AnimatedExRow({ ex, isDone, onPress, onEdit, index, t }) {
         >
           <Text style={[s.exName, { color: t.text }]}>{ex}</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            s.editBtn,
-            { borderColor: t.border, backgroundColor: t.inputBg },
-          ]}
-          onPress={onEdit}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel={`Edit ${ex}`}
-        >
-          <Text style={[s.editBtnText, { color: t.textSub }]}>Edit</Text>
-        </TouchableOpacity>
+        {timed && (
+          <Ionicons
+            name="time-outline"
+            size={14}
+            color={t.textHint}
+            accessibilityLabel="Timed exercise"
+          />
+        )}
+        {canEdit && (
+          <TouchableOpacity
+            style={[
+              s.editBtn,
+              { borderColor: t.border, backgroundColor: t.inputBg },
+            ]}
+            onPress={onEdit}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={`Rename ${ex}`}
+          >
+            <Text style={[s.editBtnText, { color: t.textSub }]}>Edit</Text>
+          </TouchableOpacity>
+        )}
         <Animated.View
           style={[
             s.check,
@@ -161,19 +204,19 @@ function GearIcon({ color, size = 18 }) {
 
 export default function DayLogger({
   dateKey,
-  dow,
   onClose,
   isPastLog = false,
+  initialWorkoutId = null,
 }) {
   const t = useTheme();
   const [sessions, setSessions] = useState({});
   const [plan, setPlan] = useState(DEFAULT_PLAN);
+  const [catalog, setCatalog] = useState({});
+  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
+  const [workoutInfo, setWorkoutInfo] = useState(null);
   const [activeEx, setActiveEx] = useState(null);
   const [activeSets, setActiveSets] = useState([]);
-  const [cardioMinutes, setCardioMinutes] = useState("");
-  const [cardioKm, setCardioKm] = useState("");
-  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
-  const [cardioSteps, setCardioSteps] = useState("");
+  const [cardioValues, setCardioValues] = useState({});
   const [weightKg, setWeightKg] = useState("");
   const [prefillDate, setPrefillDate] = useState(null);
   const [editingEx, setEditingEx] = useState(null);
@@ -181,55 +224,72 @@ export default function DayLogger({
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [isRestDay, setIsRestDay] = useState(false);
   const [showRestBanner, setShowRestBanner] = useState(true);
-  const [dayOverride, setDayOverride] = useState(null);
   const slideAnim = useRef(new Animated.Value(60)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const saveScaleAnim = useRef(new Animated.Value(1)).current;
 
-  const effectiveDow = dayOverride !== null ? dayOverride : dow;
-  const day = plan[effectiveDow];
+  const workout = workoutInfo?.workout || null;
+  const ordinal = workout ? getWorkoutOrdinal(plan, workout.id) : null;
 
   const loadScreenData = useCallback(async () => {
-    const loadedSessions = await loadSessions();
-    const savedCardioConfig = await loadCardioConfig();
-    setCardioConfig(savedCardioConfig || DEFAULT_CARDIO_CONFIG);
-    const customPlan = await loadCustomPlan();
-    const restDays = await loadRestDays();
-    const overrides = await loadDayOverrides();
-    const todayOverride = overrides[dateKey] ?? null;
+    const [
+      loadedSessions,
+      customPlan,
+      savedCardioConfig,
+      restDays,
+      assignments,
+      loadedCatalog,
+    ] = await Promise.all([
+      loadSessions(),
+      loadCustomPlan(),
+      loadCardioConfig(),
+      loadRestDays(),
+      loadDayOverrides(),
+      loadCatalog(),
+    ]);
 
-    let effectiveDowLocal = dow;
-    if (todayOverride !== null) {
-      effectiveDowLocal = todayOverride;
-    } else if (loadedSessions[dateKey]?._dow !== undefined) {
-      effectiveDowLocal = loadedSessions[dateKey]._dow;
-    }
-
-    setDayOverride(todayOverride !== null ? todayOverride : (loadedSessions[dateKey]?._dow !== undefined ? loadedSessions[dateKey]._dow : null));
-
-    if (!loadedSessions[dateKey])
-      loadedSessions[dateKey] = { _dow: effectiveDowLocal };
-    else
-      loadedSessions[dateKey] = {
-        ...loadedSessions[dateKey],
-        _dow: effectiveDowLocal,
-      };
-
-    const nextPlan =
-      customPlan && typeof customPlan === "object" ? customPlan : DEFAULT_PLAN;
-    const restStatus = !!restDays[dateKey] || !!loadedSessions[dateKey]?._rest;
-    setSessions({ ...loadedSessions });
     const liveConfig = savedCardioConfig || DEFAULT_CARDIO_CONFIG;
-    setPlan(applyCardioConfigToPlan(nextPlan, liveConfig));
-    setIsRestDay(restStatus || !nextPlan[effectiveDowLocal]);
-    setShowRestBanner(restStatus || !nextPlan[effectiveDowLocal]);
-  }, [dateKey, dow]);
+    const basePlan =
+      customPlan && typeof customPlan === "object" ? customPlan : DEFAULT_PLAN;
+    const nextPlan = applyCardioConfigToPlan(basePlan, liveConfig);
+    const context = getWorkoutForDate(
+      nextPlan,
+      loadedSessions,
+      assignments,
+      dateKey,
+      initialWorkoutId,
+    );
+
+    const restStatus =
+      !!restDays[dateKey] || !!loadedSessions[dateKey]?._rest;
+
+    setSessions(loadedSessions);
+    setPlan(nextPlan);
+    setCardioConfig(liveConfig);
+    setCatalog(loadedCatalog || {});
+    setWorkoutInfo(context);
+    setIsRestDay(restStatus);
+    setShowRestBanner(restStatus);
+  }, [dateKey, initialWorkoutId]);
 
   useFocusEffect(
     useCallback(() => {
       loadScreenData();
     }, [loadScreenData]),
   );
+
+  const closeLogger = useCallback(() => {
+    setActiveEx(null);
+    setActiveSets([]);
+    setCardioValues({});
+    setWeightKg("");
+    setPrefillDate(null);
+  }, []);
+
+  const cancelEditingExercise = useCallback(() => {
+    setEditingEx(null);
+    setEditingName("");
+  }, []);
 
   useEffect(() => {
     Animated.parallel([
@@ -250,7 +310,7 @@ export default function DayLogger({
     editingEx,
     isRestDay,
     showRestBanner,
-    day,
+    workout?.id,
     fadeAnim,
     slideAnim,
   ]);
@@ -274,61 +334,39 @@ export default function DayLogger({
         onHardwareBackPress,
       );
       return () => subscription.remove();
-    }, [activeEx, editingEx]),
+    }, [activeEx, editingEx, cancelEditingExercise, closeLogger]),
   );
 
-  const openLogger = (ex) => {
-    const isCardio = isCardioExercise(ex, cardioConfig);
-    const storageKey = isCardio ? (getCardioEntry(ex, cardioConfig)?.id || ex) : ex;
-    let current = sessions[dateKey]?.[storageKey];
-    if (current === undefined && isCardio) {
-      const entry = getCardioEntry(ex, cardioConfig);
-      if (entry && sessions[dateKey]?.[entry.name] !== undefined) {
-        current = sessions[dateKey][entry.name];
-      }
-    }
-    setActiveEx(ex);
+  const openLogger = (exerciseName) => {
+    const info = getSessionEntry(sessions[dateKey], exerciseName, cardioConfig);
+    setActiveEx(exerciseName);
+    setPrefillDate(null);
 
-    if (isCardio) {
+    if (info.kind === "cardio") {
       setActiveSets([]);
-      setCardioMinutes(
-        current && typeof current === "object"
-          ? String(current.minutes ?? "")
-          : "",
-      );
-      setCardioKm(
-        current && typeof current === "object" ? String(current.km ?? "") : "",
-      );
-      setCardioSteps(
-        current && typeof current === "object"
-          ? String(current.steps ?? "")
-          : "",
-      );
+      setCardioValues(normalizeCardioValues(info.entry));
       setWeightKg("");
-    } else if (isWeightExercise(ex)) {
+    } else if (info.kind === "weight") {
       setActiveSets([]);
-      setCardioMinutes("");
-      setCardioKm("");
-      setWeightKg(
-        current && typeof current === "object" ? String(current.kg ?? "") : "",
-      );
+      setCardioValues({});
+      setWeightKg(String(info.entry?.kg ?? ""));
     } else {
-      // `ex` is already the storage name (renames are resolved during render),
-      // so prefill from the most recent logged sets for this same exercise.
-      const latestResult =
+      const current = sessions[dateKey]?.[exerciseName];
+      const latest =
         Array.isArray(current) && current.length > 0
           ? { sets: current, dateKey }
-          : getLatestExerciseSets(sessions, ex, dateKey);
-      const latestSets =
-        Array.isArray(latestResult?.sets) && latestResult.sets.length > 0
-          ? latestResult.sets
-          : createWorkoutSets();
-      setActiveSets(normalizeWorkoutSets(latestSets));
-      setPrefillDate(latestResult?.dateKey ?? null);
-      setCardioMinutes("");
-      setCardioKm("");
+          : getLatestExerciseSets(sessions, exerciseName, dateKey);
+
+      setActiveSets(
+        latest?.sets?.length
+          ? normalizeWorkoutSets(latest.sets)
+          : createWorkoutSets(),
+      );
+      setPrefillDate(latest?.dateKey ?? null);
+      setCardioValues({});
       setWeightKg("");
     }
+
     Animated.spring(slideAnim, {
       toValue: 0,
       useNativeDriver: true,
@@ -343,16 +381,6 @@ export default function DayLogger({
     }).start();
   };
 
-  const closeLogger = () => {
-    setActiveEx(null);
-    setActiveSets([]);
-    setCardioMinutes("");
-    setCardioKm("");
-    setCardioSteps("");
-    setWeightKg("");
-    setPrefillDate(null);
-  };
-
   const updateSet = (index, key, value) => {
     setActiveSets((prev) =>
       prev.map((set, i) => (i === index ? { ...set, [key]: value } : set)),
@@ -360,134 +388,129 @@ export default function DayLogger({
   };
 
   const saveExercise = async () => {
-    if (!activeEx || !day) return;
-    const nextSessions = { ...sessions };
-    nextSessions[dateKey] = {
-      ...(nextSessions[dateKey] || {}),
-      _dow: effectiveDow,
-    };
-    
-    const isCardio = isCardioExercise(activeEx, cardioConfig);
-    const storageKey = isCardio 
-      ? (getCardioEntry(activeEx, cardioConfig)?.id || activeEx) 
-      : activeEx;
+    if (!activeEx || !workout) return;
 
-    nextSessions[dateKey][storageKey] = isCardio
-      ? { minutes: cardioMinutes, km: cardioKm, steps: cardioSteps }
-      : isWeightExercise(activeEx)
-        ? { kg: weightKg }
-        : normalizeWorkoutSets(activeSets);
+    const nextSessions = JSON.parse(JSON.stringify(sessions));
+    const existing = nextSessions[dateKey] || {};
+    existing._workoutId = workout.id;
+    existing._label = workout.label;
+    delete existing._rest;
 
-    if (isCardio && storageKey !== activeEx) {
-      delete nextSessions[dateKey][activeEx];
+    const info = getSessionEntry(existing, activeEx, cardioConfig);
+
+    if (info.kind === "cardio") {
+      const storageKey = getCardioStorageKey(activeEx, cardioConfig);
+      if (hasCardioValues(cardioValues)) {
+        existing[storageKey] = normalizeCardioValues(cardioValues);
+      } else {
+        delete existing[storageKey];
+      }
+      if (storageKey !== activeEx) delete existing[activeEx];
+    } else if (info.kind === "weight") {
+      const kg = String(weightKg || "").trim();
+      if (kg) existing[activeEx] = { kg };
+      else delete existing[activeEx];
+    } else {
+      const sets = cleanWorkoutSets(activeSets);
+      if (sets.length > 0) existing[activeEx] = sets;
+      else delete existing[activeEx];
     }
 
+    nextSessions[dateKey] = existing;
     await saveSessions(nextSessions);
+    if (isRestDay) {
+      await saveRestDay(dateKey, false);
+    }
     setSessions(nextSessions);
+    setIsRestDay(false);
     closeLogger();
   };
 
-  const startEditingExercise = (groupIndex, exerciseIndex, ex) => {
-    setEditingEx({ groupIndex, exerciseIndex, oldName: ex });
-    const renames = sessions[dateKey]?._localRenames || {};
-    setEditingName(renames[ex] || ex);
-  };
-
-  const cancelEditingExercise = () => {
-    setEditingEx(null);
-    setEditingName("");
+  const startEditingExercise = (exerciseName) => {
+    setEditingEx({ oldName: exerciseName });
+    setEditingName(exerciseName);
   };
 
   const saveEditedExercise = async () => {
-    if (!editingEx || !day) return;
+    if (!editingEx || !workout) return;
     const trimmed = editingName.trim();
     if (!trimmed) {
       Alert.alert("Invalid name", "Exercise name cannot be empty.");
       return;
     }
-    const group = day.groups[editingEx.groupIndex];
-    const duplicate = group.exercises.some(
-      (name, index) =>
-        index !== editingEx.exerciseIndex &&
-        name.toLowerCase() === trimmed.toLowerCase(),
+    if (trimmed === editingEx.oldName) {
+      cancelEditingExercise();
+      return;
+    }
+
+    const existsInPlan = findExerciseInPlan(plan, trimmed);
+    const existsInHistory = Object.keys(sessions).some((key) =>
+      Object.keys(sessions[key] || {}).some(
+        (exercise) =>
+          !exercise.startsWith("_") &&
+          exercise !== editingEx.oldName &&
+          exercise.toLowerCase() === trimmed.toLowerCase(),
+      ),
     );
-    if (duplicate) {
+    const clashesWithCardio = cardioConfig.some(
+      (entry) =>
+        String(entry.name || "").trim().toLowerCase() ===
+          trimmed.toLowerCase() ||
+        String(entry.id || "").toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (
+      existsInPlan ||
+      existsInHistory ||
+      clashesWithCardio ||
+      isWeightExercise(trimmed)
+    ) {
       Alert.alert(
         "Already exists",
-        "That exercise already exists in this muscle group.",
+        "An exercise with that name already exists. Pick a unique name.",
       );
       return;
     }
 
-    const planName = editingEx.oldName;
-    const nextSessions = { ...sessions };
-    if (!nextSessions[dateKey]) nextSessions[dateKey] = { _dow: dow };
-
-    // A previous rename already moved this exercise's data off the plan name,
-    // so always relocate from the *current* stored key. Otherwise a second
-    // rename would orphan the data (the old key no longer exists).
-    const currentRenames = nextSessions[dateKey]?._localRenames || {};
-    const currentKey = currentRenames[planName] || planName;
-
-    const renamedSessions = renameExerciseInSessions(nextSessions, currentKey, trimmed);
-    const persistedSessions = renamedSessions.changed ? renamedSessions.sessions : nextSessions;
-
-    // Rebuild set-based exercise renames as a per-session map so every date
-    // (past and future) resolves the renamed key identically. Cardio and body
-    // weight entries are keyed by config id / fixed name, so they must not be
-    // run through the plain rename map — resolving them would silently
-    // disconnect them from their stored data.
-    const renameAsSets =
-      !isCardioExercise(planName, cardioConfig) && !isWeightExercise(planName);
-    if (renameAsSets) {
-      if (!persistedSessions[dateKey]) {
-        persistedSessions[dateKey] = { _dow: effectiveDow };
-      }
-      Object.keys(persistedSessions).forEach((k) => {
-        const day = persistedSessions[k];
-        if (!day || typeof day !== "object" || Array.isArray(day)) return;
-        const renames = day._localRenames
-          ? { ...day._localRenames }
-          : {};
-        renames[planName] = trimmed;
-        persistedSessions[k] = { ...day, _localRenames: renames };
-      });
+    try {
+      const result = await renameExerciseGlobally(editingEx.oldName, trimmed);
+      setSessions(result.sessions);
+      setPlan(result.plan);
+      setCatalog(result.catalog);
+      setWorkoutInfo((prev) => ({
+        ...prev,
+        workout: getWorkoutById(result.plan, prev?.workout?.id),
+      }));
+      cancelEditingExercise();
+    } catch {
+      Alert.alert("Rename failed", "Could not rename this exercise.");
     }
-
-    await saveSessions(persistedSessions);
-    setSessions(persistedSessions);
-    cancelEditingExercise();
   };
 
-  const activeIsCardio = activeEx
-    ? isCardioExercise(activeEx, cardioConfig)
-    : false;
-  const activeIsWeight = activeEx ? isWeightExercise(activeEx) : false;
-  const totalVol = activeIsCardio
-    ? 0
-    : activeSets.reduce(
-        (sum, set) => sum + (parseFloat(set.w) || 0) * (parseInt(set.r) || 0),
-        0,
-      );
-  const showRestView = (isRestDay && showRestBanner) || !day;
+  const activeInfo = activeEx
+    ? getSessionEntry(sessions[dateKey], activeEx, cardioConfig)
+    : null;
+  const activeIsCardio = activeInfo?.kind === "cardio";
+  const activeIsWeight = activeInfo?.kind === "weight";
+  const activeTimed =
+    !!activeEx && !activeIsCardio && !activeIsWeight
+      ? isTimedExercise(activeEx, catalog)
+      : false;
+  const activeCardioConfig = activeIsCardio
+    ? getCardioEntry(activeEx, cardioConfig)
+    : null;
+  // Past logs always show the workout, even when that date was marked as rest.
+  const showRestView =
+    !isPastLog && ((isRestDay && showRestBanner) || !workout);
+  const nextWorkoutId = getNextWorkoutId(plan, sessions, dateKey);
+  const nextWorkout = getWorkoutById(plan, nextWorkoutId);
 
-  const isExerciseDone = (ex) => {
-    const isCardio = isCardioExercise(ex, cardioConfig);
-    const storageKey = isCardio ? (getCardioEntry(ex, cardioConfig)?.id || ex) : ex;
-    let entry = sessions[dateKey]?.[storageKey];
-    if (entry === undefined && isCardio) {
-      const cardioEntry = getCardioEntry(ex, cardioConfig);
-      if (cardioEntry && sessions[dateKey]?.[cardioEntry.name] !== undefined) {
-        entry = sessions[dateKey][cardioEntry.name];
-      }
-    }
-    if (isCardio || isWeightExercise(ex))
-      return !!entry;
-    return Array.isArray(entry) && entry.length > 0;
+  const isExerciseDone = (exerciseName) => {
+    const info = getSessionEntry(sessions[dateKey], exerciseName, cardioConfig);
+    return isEntryLogged(info);
   };
 
   const renderRestBanner = () =>
-    showRestBanner ? (
+    showRestBanner && isRestDay ? (
       <TouchableWithoutFeedback onPress={() => setShowRestBanner(false)}>
         <View
           style={[
@@ -496,9 +519,11 @@ export default function DayLogger({
           ]}
         >
           <View style={s.restBannerTextWrap}>
-            <Text style={[s.restBannerTitle, { color: t.text }]}>Rest Day</Text>
+            <Text style={[s.restBannerTitle, { color: t.text }]}>
+              Rest day
+            </Text>
             <Text style={[s.restBannerSub, { color: t.textSub }]}>
-              Come back tomorrow
+              {nextWorkout ? `Next up: ${nextWorkout.label}` : "Recover well"}
             </Text>
           </View>
           <TouchableOpacity
@@ -517,12 +542,13 @@ export default function DayLogger({
       </TouchableWithoutFeedback>
     ) : null;
 
-  const headerDateLabel = new Date(dateKey + "T00:00:00").toLocaleDateString(
-    "en-IN",
-    { weekday: "long", day: "numeric", month: "long" },
-  );
+  const headerDateLabel = formatDate(dateKey, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
 
-  if (editingEx && day) {
+  if (editingEx && workout) {
     return (
       <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
         <View
@@ -533,8 +559,10 @@ export default function DayLogger({
         >
           <View style={s.topbarRow}>
             <View>
-              <Text style={[s.topTitle, { color: t.text }]}>Edit exercise</Text>
-              <Text style={[s.topSub, { color: t.textSub }]}>{day.label}</Text>
+              <Text style={[s.topTitle, { color: t.text }]}>Rename exercise</Text>
+              <Text style={[s.topSub, { color: t.textSub }]}>
+                {workout.label} · updates history everywhere
+              </Text>
             </View>
             <AppLogo theme={t} compact />
           </View>
@@ -564,6 +592,10 @@ export default function DayLogger({
               placeholderTextColor={t.textHint}
               autoFocus
             />
+            <Text style={[s.editHint, { color: t.textHint }]}>
+              The new name is applied to every workout and all past sessions, so
+              progress charts stay connected.
+            </Text>
             <View style={s.editActions}>
               <TouchableOpacity
                 style={[
@@ -652,10 +684,12 @@ export default function DayLogger({
             </View>
             <Text style={[s.loggerSub, { color: t.textSub }]}>
               {activeIsCardio
-                ? "Log your cardio session"
+                ? "Log duration and the metrics that matter"
                 : activeIsWeight
                   ? "Log your body weight for today"
-                  : "Track each set with clean form and controlled tempo"}
+                  : activeTimed
+                    ? "Log weight (optional) and time per set"
+                    : "Track each set with clean form and controlled tempo"}
             </Text>
             {isPastLog && (
               <View
@@ -684,6 +718,7 @@ export default function DayLogger({
               </View>
             )}
           </View>
+
           <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
             <View
               style={[
@@ -693,19 +728,15 @@ export default function DayLogger({
             >
               {activeIsCardio && (
                 <CardioLogger
-                  exerciseName={activeEx}
-                  cardioConfig={cardioConfig}
-                  minutes={cardioMinutes}
-                  onMinutesChange={setCardioMinutes}
-                  km={cardioKm}
-                  onKmChange={setCardioKm}
-                  steps={cardioSteps}
-                  onStepsChange={setCardioSteps}
+                  entry={cardioValues}
+                  onChange={setCardioValues}
+                  configEntry={activeCardioConfig}
                   theme={t}
                   styles={s}
                 />
               )}
-              {!activeIsCardio && activeIsWeight ? (
+
+              {!activeIsCardio && activeIsWeight && (
                 <>
                   <View
                     style={[
@@ -738,126 +769,23 @@ export default function DayLogger({
                       placeholder="kg"
                       placeholderTextColor={t.textHint}
                       keyboardType="decimal-pad"
+                      accessibilityLabel="Body weight in kilograms"
                     />
                   </View>
                 </>
-              ) : !activeIsCardio ? (
-                <>
-                  <View
-                    style={[
-                      s.setHeader,
-                      {
-                        borderBottomColor: t.border,
-                        backgroundColor: t.inputBg,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[s.setColHdr, { flex: 1.4, color: t.textHint }]}
-                    >
-                      Set
-                    </Text>
-                    <Text
-                      style={[
-                        s.setColHdr,
-                        { flex: 1, textAlign: "center", color: t.textHint },
-                      ]}
-                    >
-                      Weight kg
-                    </Text>
-                    <Text
-                      style={[
-                        s.setColHdr,
-                        { flex: 1, textAlign: "center", color: t.textHint },
-                      ]}
-                    >
-                      Reps
-                    </Text>
-                    <Text
-                      style={[
-                        s.setColHdr,
-                        { flex: 0.8, textAlign: "right", color: t.textHint },
-                      ]}
-                    >
-                      Vol
-                    </Text>
-                  </View>
-                  {activeSets.map((set, i) => {
-                    const vol =
-                      (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
-                    return (
-                      <View
-                        key={i}
-                        style={[s.setRow, { borderTopColor: t.border }]}
-                      >
-                        <Text
-                          style={[
-                            s.setLabel,
-                            { color: t.textSub },
-                            { flex: 1.4 },
-                          ]}
-                        >
-                          {set.label}
-                        </Text>
-                        <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                          <TextInput
-                            style={[
-                              s.numInput,
-                              {
-                                backgroundColor: t.inputBg,
-                                borderColor: t.border,
-                                color: t.text,
-                              },
-                            ]}
-                            value={set.w}
-                            onChangeText={(value) => updateSet(i, "w", value)}
-                            placeholder="kg"
-                            placeholderTextColor={t.textHint}
-                            keyboardType="decimal-pad"
-                          />
-                        </View>
-                        <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                          <TextInput
-                            style={[
-                              s.numInput,
-                              {
-                                backgroundColor: t.inputBg,
-                                borderColor: t.border,
-                                color: t.text,
-                              },
-                            ]}
-                            value={set.r}
-                            onChangeText={(value) => updateSet(i, "r", value)}
-                            placeholder="reps"
-                            placeholderTextColor={t.textHint}
-                            keyboardType="number-pad"
-                          />
-                        </View>
-                        <Text
-                          style={[
-                            s.setVol,
-                            {
-                              flex: 0.8,
-                              color: vol > 0 ? t.accent : t.textHint,
-                            },
-                          ]}
-                        >
-                          {vol > 0 ? Math.round(vol) + "" : "—"}
-                        </Text>
-                      </View>
-                    );
-                  })}
-                  <View style={[s.totalRow, { borderTopColor: t.border }]}>
-                    <Text style={[s.totalLabel, { color: t.textSub }]}>
-                      Total volume
-                    </Text>
-                    <Text
-                      style={[s.totalVal, { color: t.text }]}
-                    >{`${Math.round(totalVol).toLocaleString()} kg`}</Text>
-                  </View>
-                </>
-              ) : null}
+              )}
+
+              {!activeIsCardio && !activeIsWeight && (
+                <SetInputs
+                  sets={activeSets}
+                  timed={activeTimed}
+                  onChange={updateSet}
+                  theme={t}
+                  styles={s}
+                />
+              )}
             </View>
+
             <Animated.View style={{ transform: [{ scale: saveScaleAnim }] }}>
               <TouchableOpacity
                 style={[s.saveBtn, { backgroundColor: t.accent }]}
@@ -886,21 +814,21 @@ export default function DayLogger({
               </TouchableOpacity>
             </Animated.View>
 
+            <Text style={[s.saveHint, { color: t.textHint }]}>
+              Saving with empty fields removes this entry from the session.
+            </Text>
           </ScrollView>
         </Animated.View>
       </SafeAreaView>
     );
   }
 
-  const totalDone = day
-    ? day.groups.reduce(
+  const totalDone = workout
+    ? workout.groups.reduce(
         (sum, group) =>
           sum + group.exercises.filter((ex) => isExerciseDone(ex)).length,
         0,
       )
-    : 0;
-  const totalEx = day
-    ? day.groups.reduce((sum, group) => sum + group.exercises.length, 0)
     : 0;
 
   return (
@@ -913,12 +841,30 @@ export default function DayLogger({
       >
         <View style={s.topbarRow}>
           <View style={{ flex: 1 }}>
-            <Text style={[s.topTitle, { color: t.text }]}>
-              {day ? day.label : "Rest Day"}
-            </Text>
+            <View style={s.titleRow}>
+              <Text style={[s.topTitle, { color: t.text }]}>
+                {isRestDay && showRestBanner
+                  ? "Rest Day"
+                  : workout
+                    ? workout.label
+                    : "Rest Day"}
+              </Text>
+              {!!ordinal && !(isRestDay && showRestBanner) && (
+                <View
+                  style={[
+                    s.ordinalBadge,
+                    { backgroundColor: t.inputBg, borderColor: t.border },
+                  ]}
+                >
+                  <Text style={[s.ordinalText, { color: t.textSub }]}>
+                    {ordinal.index}/{ordinal.total}
+                  </Text>
+                </View>
+              )}
+            </View>
             <Text style={[s.topSub, { color: t.textSub }]}>
               {headerDateLabel}
-              {totalDone > 0 ? `  ·  ${totalDone}/${totalEx} done` : ""}
+              {totalDone > 0 ? `  ·  ${totalDone} logged` : ""}
             </Text>
           </View>
           <View style={s.topBarRight}>
@@ -948,6 +894,9 @@ export default function DayLogger({
             </TouchableOpacity>
           </View>
         </View>
+        <Text style={[s.quote, { color: t.textHint }]}>
+          Things will never get serious until you decide to take them serious.
+        </Text>
         {isPastLog && (
           <View
             style={[
@@ -962,20 +911,25 @@ export default function DayLogger({
           </View>
         )}
       </View>
+
       <ScrollView
         style={s.scroll}
         contentContainerStyle={{ paddingBottom: 16 }}
       >
         {showRestView ? renderRestBanner() : null}
         {!showRestView &&
-          day.groups.map((group, groupIndex) => {
-            const localRenames = sessions[dateKey]?._localRenames || {};
+          workout.groups
+            .filter((group) => (group.exercises || []).length > 0)
+            .map((group) => {
             const done = group.exercises.filter((ex) =>
-              isExerciseDone(localRenames[ex] || ex),
+              isExerciseDone(ex),
             ).length;
+            const canEdit =
+              group.name !== "Cardio" && group.name !== "Weight";
+
             return (
               <View
-                key={groupIndex}
+                key={group.name}
                 style={[
                   s.card,
                   { backgroundColor: t.surface, borderColor: t.border },
@@ -987,9 +941,7 @@ export default function DayLogger({
                       s.dot,
                       {
                         backgroundColor:
-                          done === group.exercises.length
-                            ? t.success
-                            : group.color,
+                          done > 0 ? t.success : group.color,
                       },
                     ]}
                   />
@@ -998,7 +950,6 @@ export default function DayLogger({
                       s.groupName,
                       {
                         color: t.text,
-                        opacity: done === group.exercises.length ? 0.5 : 1,
                       },
                     ]}
                   >
@@ -1009,9 +960,7 @@ export default function DayLogger({
                       s.badge,
                       {
                         backgroundColor:
-                          done === group.exercises.length
-                            ? t.success + "22"
-                            : t.inputBg,
+                          done > 0 ? t.success + "22" : t.inputBg,
                       },
                     ]}
                   >
@@ -1020,37 +969,37 @@ export default function DayLogger({
                         s.badgeText,
                         {
                           color:
-                            done === group.exercises.length
+                            done > 0
                               ? t.success
                               : t.textSub,
                         },
                       ]}
                     >
-                      {done}/{group.exercises.length}
+                      {done} logged
                     </Text>
                   </View>
                 </View>
-                {group.exercises.map((ex, exerciseIndex) => {
-                  const displayEx = localRenames[ex] || ex;
-                  const sessionKey = localRenames[ex] ? localRenames[ex] : ex;
-                  return (
-                    <AnimatedExRow
-                      key={exerciseIndex}
-                      ex={displayEx}
-                      isDone={isExerciseDone(sessionKey)}
-                      onPress={() => openLogger(sessionKey)}
-                      onEdit={() =>
-                        startEditingExercise(groupIndex, exerciseIndex, ex)
-                      }
-                      index={exerciseIndex}
-                      t={t}
-                    />
-                  );
-                })}
+                {group.exercises.map((ex, exerciseIndex) => (
+                  <AnimatedExRow
+                    key={ex}
+                    ex={ex}
+                    isDone={isExerciseDone(ex)}
+                    timed={
+                      canEdit &&
+                      getExerciseTracking(ex, catalog) === "time"
+                    }
+                    canEdit={canEdit}
+                    onPress={() => openLogger(ex)}
+                    onEdit={() => startEditingExercise(ex)}
+                    index={exerciseIndex}
+                    t={t}
+                  />
+                ))}
               </View>
             );
           })}
       </ScrollView>
+
       <SettingsModal
         visible={settingsVisible}
         onClose={() => {
@@ -1080,8 +1029,17 @@ const s = StyleSheet.create({
     gap: 10,
   },
   topBarRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   topTitle: { fontSize: 20, fontWeight: "600" },
   topSub: { fontSize: 12, marginTop: 3 },
+  quote: { fontSize: 11, fontStyle: "italic", lineHeight: 15, marginTop: 8 },
+  ordinalBadge: {
+    borderWidth: 0.5,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  ordinalText: { fontSize: 10, fontWeight: "600" },
   scroll: { flex: 1, padding: 12 },
   card: {
     borderRadius: 14,
@@ -1246,6 +1204,12 @@ const s = StyleSheet.create({
     elevation: 4,
   },
   saveBtnText: { fontSize: 15, fontWeight: "600" },
+  saveHint: {
+    fontSize: 10,
+    textAlign: "center",
+    marginTop: 8,
+    paddingHorizontal: 18,
+  },
   restBanner: {
     borderRadius: 14,
     borderWidth: 0.5,
@@ -1283,6 +1247,7 @@ const s = StyleSheet.create({
   editWrap: { flex: 1, padding: 12 },
   editCard: { borderRadius: 14, borderWidth: 0.5, padding: 14 },
   editLabel: { fontSize: 12, marginBottom: 6 },
+  editHint: { fontSize: 11, lineHeight: 16, marginTop: 8 },
   editInput: {
     borderWidth: 0.5,
     borderRadius: 10,

@@ -9,7 +9,7 @@ export const CHART_COLORS = {
   Biceps: '#4A9FE8',
   Shoulders: '#E8B84A',
   Legs: '#7ABF3A',
-  'Abs, Wrist & Forearms': '#9A9A9A',
+  'Abs & Forearms': '#9A9A9A',
   Weight: '#A78BFA',
   Cardio: '#F35D8A',
 };

@@ -1,198 +1,80 @@
+export const APP_VERSION = "6.0.0";
+export const PLAN_VERSION = 3;
+
+// ---------------------------------------------------------------------------
+// Cardio configuration
+// ---------------------------------------------------------------------------
+
+export const CARDIO_FIELD_DEFS = {
+  duration: { key: "duration", label: "Duration", unit: "time" },
+  distance: { key: "distance", label: "Distance", unit: "km" },
+  speed: { key: "speed", label: "Speed", unit: "km/h" },
+  incline: { key: "incline", label: "Incline", unit: "%" },
+};
+
+export const CARDIO_FIELD_OPTIONS = Object.values(CARDIO_FIELD_DEFS);
+
 export const DEFAULT_CARDIO_CONFIG = [
-  { id: "walking", name: "Walking", metric: "steps+km", stepGoal: 10000 },
-  { id: "cycling", name: "Cycling", metric: "minutes+km" },
-  { id: "plank", name: "Plank", metric: "minutes" },
+  {
+    id: "walking",
+    name: "Walking",
+    fields: ["duration", "distance", "speed", "incline"],
+  },
+  { id: "plank", name: "Plank", fields: ["duration"] },
 ];
 
-export const PLAN_VERSION = 2;
+// Cardio entries that are no longer part of the app. Stored configs are
+// filtered so removed entries disappear from Today and Progress.
+const RETIRED_CARDIO_NAMES = ["cycling"];
 
-// These functions accept an optional cardioConfig array.
-// If not passed they fall back to DEFAULT_CARDIO_CONFIG.
-// All screens should pass the loaded config from AsyncStorage.
+export function normalizeCardioConfig(config) {
+  if (!Array.isArray(config)) return DEFAULT_CARDIO_CONFIG;
+  const seen = new Set();
+  const entries = [];
+  config.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const name = String(entry.name || "").trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) return;
+    if (RETIRED_CARDIO_NAMES.includes(key)) return;
+    seen.add(key);
+    const fields = (Array.isArray(entry.fields) ? entry.fields : []).filter(
+      (field) => CARDIO_FIELD_DEFS[field],
+    );
+    entries.push({
+      id: entry.id || key.replace(/[^a-z0-9]+/g, "_"),
+      name,
+      fields: fields.length ? fields : ["duration"],
+    });
+  });
+  return entries.length ? entries : DEFAULT_CARDIO_CONFIG;
+}
+
+export function getCardioFields(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
+  const entry = getCardioEntry(exerciseName, config);
+  if (!entry || !Array.isArray(entry.fields)) return [];
+  return entry.fields.filter((field) => CARDIO_FIELD_DEFS[field]);
+}
 
 export function isCardioExercise(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
   return config.some((c) => c.name === exerciseName || c.id === exerciseName);
 }
 
 export function getCardioEntry(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
-  return config.find((c) => c.name === exerciseName || c.id === exerciseName) || null;
+  return (
+    config.find(
+      (c) => c.name === exerciseName || c.id === exerciseName,
+    ) || null
+  );
 }
 
-export function cardioHasDistance(
-  exerciseName,
-  config = DEFAULT_CARDIO_CONFIG,
-) {
-  const entry = getCardioEntry(exerciseName, config);
-  return entry ? ["minutes+km", "steps+km"].includes(entry.metric) : false;
+export function cardioHasField(exerciseName, field, config) {
+  return getCardioFields(exerciseName, config).includes(field);
 }
 
-export function cardioHasSteps(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
-  const entry = getCardioEntry(exerciseName, config);
-  return entry ? entry.metric === "steps+km" : false;
-}
-
-export function cardioMetric(exerciseName, config = DEFAULT_CARDIO_CONFIG) {
-  const entry = getCardioEntry(exerciseName, config);
-  return entry ? entry.metric : null;
-}
-
-const CARDIO_GROUP = {
-  name: "Cardio",
-  color: "#F35D8A",
-  get exercises() {
-    return DEFAULT_CARDIO_CONFIG.map((c) => c.name);
-  },
-};
-
-export const WEIGHT_EXERCISES = ["Body Weight"];
-
-export function isWeightExercise(exerciseName) {
-  return WEIGHT_EXERCISES.includes(exerciseName);
-}
-
-const WEIGHT_GROUP = {
-  name: "Weight",
-  color: "#A78BFA",
-  exercises: WEIGHT_EXERCISES,
-};
-
-export const PLAN = {
-  1: {
-    label: "Monday",
-    groups: [
-      {
-        name: "Chest",
-        color: "#7B72E8",
-        exercises: [
-          "Flat Barbell Press",
-          "Incline Dumbbell Press",
-          "Pec Deck",
-        ],
-      },
-      {
-        name: "Triceps",
-        color: "#E8724A",
-        exercises: ["Skull Crushers", "Tricep Pushdowns (Rope)"],
-      },
-      CARDIO_GROUP,
-      WEIGHT_GROUP,
-    ],
-  },
-  2: {
-    label: "Tuesday",
-    groups: [
-      {
-        name: "Back",
-        color: "#2DBF8E",
-        exercises: [
-          "Barbell Row",
-          "Lat Pulldown (Wide Grip)",
-          "Single-Arm Dumbbell Row",
-        ],
-      },
-      {
-        name: "Biceps",
-        color: "#4A9FE8",
-        exercises: ["Cable Curls", "Incline Dumbbell Curl"],
-      },
-      CARDIO_GROUP,
-      WEIGHT_GROUP,
-    ],
-  },
-  3: {
-    label: "Wednesday",
-    groups: [
-      {
-        name: "Shoulders",
-        color: "#E8B84A",
-        exercises: ["Seated Barbell Overhead Press", "Cable Lateral Raise"],
-      },
-      {
-        name: "Legs",
-        color: "#7ABF3A",
-        exercises: ["Leg Press", "Seated Leg Curl", "Leg Extension"],
-      },
-      CARDIO_GROUP,
-      WEIGHT_GROUP,
-    ],
-  },
-  4: {
-    label: "Thursday",
-    groups: [
-      {
-        name: "Chest",
-        color: "#7B72E8",
-        exercises: [
-          "Incline Barbell Press",
-          "Flat Dumbbell Press",
-          "Cable Fly (low-to-high / high-to-low)",
-        ],
-      },
-      {
-        name: "Triceps",
-        color: "#E8724A",
-        exercises: [
-          "Close-Grip Bench Press",
-          "Overhead Cable Tricep Extension (Rope)",
-        ],
-      },
-      CARDIO_GROUP,
-      WEIGHT_GROUP,
-    ],
-  },
-  5: {
-    label: "Friday",
-    groups: [
-      {
-        name: "Back",
-        color: "#2DBF8E",
-        exercises: [
-          "T-Bar Row",
-          "Lat Pulldown (Neutral Grip)",
-          "Straight-Arm Cable Pulldown",
-        ],
-      },
-      {
-        name: "Biceps",
-        color: "#4A9FE8",
-        exercises: ["EZ Bar Preacher Curl", "Hammer Curl"],
-      },
-      CARDIO_GROUP,
-      WEIGHT_GROUP,
-    ],
-  },
-  6: {
-    label: "Saturday",
-    groups: [
-      {
-        name: "Shoulders",
-        color: "#E8B84A",
-        exercises: [
-          "Dumbbell Lateral Raise",
-          "Cable Rear Delt Fly",
-          "Face Pull",
-        ],
-      },
-      {
-        name: "Legs",
-        color: "#7ABF3A",
-        exercises: ["Squats", "Romanian Deadlifts"],
-      },
-      {
-        name: "Abs, Wrist & Forearms",
-        color: "#9A9A9A",
-        exercises: [
-          "Lying Leg Raise",
-          "Wrist Curls",
-          "Farmer's Carry",
-        ],
-      },
-      CARDIO_GROUP,
-      WEIGHT_GROUP,
-    ],
-  },
-  0: null,
-};
+// ---------------------------------------------------------------------------
+// Plan (5 flexible workout templates, no fixed weekdays)
+// ---------------------------------------------------------------------------
 
 export const MUSCLE_COLORS = {
   Chest: "#7B72E8",
@@ -201,16 +83,159 @@ export const MUSCLE_COLORS = {
   Biceps: "#4A9FE8",
   Shoulders: "#E8B84A",
   Legs: "#7ABF3A",
-  "Abs, Wrist & Forearms": "#9A9A9A",
+  "Abs & Forearms": "#9A9A9A",
+  Other: "#8A8A8A",
+  Weight: "#A78BFA",
+  Cardio: "#F35D8A",
 };
+
+// Older builds called this group "Abs, Wrist & Forearms". Stored plans and
+// catalogs are mapped forward so history keeps the same color and totals.
+export const MUSCLE_ALIASES = {
+  "Abs, Wrist & Forearms": "Abs & Forearms",
+};
+
+const CARDIO_GROUP = {
+  name: "Cardio",
+  color: MUSCLE_COLORS.Cardio,
+  get exercises() {
+    return DEFAULT_CARDIO_CONFIG.map((c) => c.name);
+  },
+};
+
+export const WEIGHT_GROUP = {
+  name: "Weight",
+  color: MUSCLE_COLORS.Weight,
+  exercises: ["Body Weight"],
+};
+
+export function isWeightExercise(exerciseName) {
+  return WEIGHT_GROUP.exercises.includes(exerciseName);
+}
+
+function strengthGroup(name, color, exercises) {
+  return { name, color, exercises };
+}
+
+function makeWorkout(id, label, groups) {
+  return { id, label, groups: [...groups, CARDIO_GROUP, WEIGHT_GROUP] };
+}
+
+export const DEFAULT_PLAN = {
+  version: PLAN_VERSION,
+  workouts: [
+    makeWorkout("push", "Push", [
+      strengthGroup("Chest", MUSCLE_COLORS.Chest, [
+        "Bench Press (Barbell)",
+        "Incline Bench Press (Dumbbell)",
+        "Chest Fly (Machine)",
+      ]),
+      strengthGroup("Triceps", MUSCLE_COLORS.Triceps, [
+        "Skullcrusher (Barbell)",
+        "Tricep Rope Pushdowns",
+      ]),
+    ]),
+    makeWorkout("pull", "Pull", [
+      strengthGroup("Back", MUSCLE_COLORS.Back, [
+        "Bent Over Row (Barbell)",
+        "Lat Pulldown (Cable)",
+        "Dumbbell Row",
+      ]),
+      strengthGroup("Biceps", MUSCLE_COLORS.Biceps, [
+        "Bicep Curl (Cable)",
+        "Seated Incline Curl (Dumbbell)",
+      ]),
+    ]),
+    makeWorkout("legs", "Legs", [
+      strengthGroup("Shoulders", MUSCLE_COLORS.Shoulders, [
+        "Overhead Press (Barbell)",
+        "Lateral Raise (Cable)",
+      ]),
+      strengthGroup("Legs", MUSCLE_COLORS.Legs, [
+        "Leg Press (Machine)",
+        "Leg Extension (Machine)",
+        "Seated Leg Curl (Machine)",
+        "Standing Calf Raise (Smith)",
+      ]),
+    ]),
+    makeWorkout("upper", "Upper", [
+      strengthGroup("Chest", MUSCLE_COLORS.Chest, [
+        "Incline Bench Press (Barbell)",
+        "Bench Press (Dumbbell)",
+      ]),
+      strengthGroup("Back", MUSCLE_COLORS.Back, [
+        "Lat Pulldown - Close Grip (Cable)",
+        "T Bar Row",
+        "Landmine Row",
+      ]),
+      strengthGroup("Triceps", MUSCLE_COLORS.Triceps, [
+        "Overhead Triceps Extension (Cable)",
+      ]),
+    ]),
+    makeWorkout("lower", "Lower", [
+      strengthGroup("Shoulders", MUSCLE_COLORS.Shoulders, [
+        "Lateral Raise (Dumbbell)",
+        "Rear Delt Reverse Fly (Cable)",
+      ]),
+      strengthGroup("Legs", MUSCLE_COLORS.Legs, [
+        "Squats (Smith Machine)",
+        "Romanian Deadlifts (Barbell)",
+      ]),
+      strengthGroup("Biceps", MUSCLE_COLORS.Biceps, [
+        "Hammer Curl (Dumbbell)",
+      ]),
+      strengthGroup(
+        "Abs & Forearms",
+        MUSCLE_COLORS["Abs & Forearms"],
+        [
+          "Lying Leg Raise",
+          "Reverse Wrist Curl (Dumbbell)",
+        ],
+      ),
+    ]),
+  ],
+};
+
+// Exercises that are measured by time rather than reps by default. Any
+// exercise can still be switched to time tracking in Settings > Exercises.
+export const DEFAULT_TIMED_EXERCISES = [];
+
+// ---------------------------------------------------------------------------
+// Plan helpers used by several screens
+// ---------------------------------------------------------------------------
+
+export function getWorkouts(plan) {
+  if (!plan) return [];
+  if (Array.isArray(plan.workouts)) return plan.workouts;
+  if (Array.isArray(plan)) return plan;
+  return [];
+}
+
+export function getWorkoutById(plan, workoutId) {
+  if (!workoutId) return null;
+  return getWorkouts(plan).find((workout) => workout.id === workoutId) || null;
+}
+
+export function getWorkoutIndex(plan, workoutId) {
+  return getWorkouts(plan).findIndex((workout) => workout.id === workoutId);
+}
+
+export function getPlanMuscles(plan) {
+  const muscles = [];
+  getWorkouts(plan).forEach((workout) => {
+    (workout.groups || []).forEach((group) => {
+      if (group.name === "Cardio" || group.name === "Weight") return;
+      if (!muscles.includes(group.name)) muscles.push(group.name);
+    });
+  });
+  return muscles;
+}
 
 export function applyCardioConfigToPlan(plan, cardioConfig) {
   if (!plan || !cardioConfig) return plan;
   const result = JSON.parse(JSON.stringify(plan));
-  Object.keys(result).forEach((dow) => {
-    const day = result[dow];
-    if (!day?.groups) return;
-    const cardioGroup = day.groups.find((g) => g.name === "Cardio");
+  getWorkouts(result).forEach((workout) => {
+    const cardioGroup = (workout.groups || []).find((g) => g.name === "Cardio");
     if (cardioGroup) cardioGroup.exercises = cardioConfig.map((c) => c.name);
   });
   return result;

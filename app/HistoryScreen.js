@@ -18,16 +18,16 @@ import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import DayLogger from "./DayLogger";
 import CardioLogger from "./CardioLogger";
+import SetInputs from "./SetInputs";
 import {
-  PLAN,
-  MUSCLE_COLORS,
+  DEFAULT_PLAN,
   DEFAULT_CARDIO_CONFIG,
+  MUSCLE_COLORS,
   applyCardioConfigToPlan,
-  isCardioExercise,
-  isWeightExercise,
-  cardioHasDistance,
-  cardioMetric,
   getCardioEntry,
+  getWorkoutById,
+  getWorkouts,
+  isWeightExercise,
 } from "../app/data";
 import AppLogo from "../app/AppLogo";
 import {
@@ -40,10 +40,26 @@ import {
   buildLLMExportPayload,
   buildCSVExport,
   loadCardioConfig,
+  loadCatalog,
+  loadDayOverrides,
   saveRestDay,
 } from "../app/storage";
 import { useTheme } from "../app/theme";
-import { createWorkoutSets, normalizeWorkoutSets } from "./workoutSets";
+import { isTimedExercise } from "../app/catalog";
+import { getWorkoutForDate } from "../app/schedule";
+import {
+  getCardioSummary,
+  getLoggedSessionEntries,
+  getSessionMuscleTags,
+  hasCardioValues,
+  isEntryLogged,
+  normalizeCardioValues,
+} from "../app/sessionUtils";
+import {
+  cleanWorkoutSets,
+  createWorkoutSets,
+  normalizeWorkoutSets,
+} from "./workoutSets";
 
 const FILTERS = [
   { key: "4w", label: "4 weeks" },
@@ -61,33 +77,41 @@ function dateToKey(date) {
 export default function HistoryScreen() {
   const t = useTheme();
   const [sessions, setSessions] = useState({});
-  const [planMap, setPlanMap] = useState(PLAN);
+  const [plan, setPlan] = useState(DEFAULT_PLAN);
+  const [catalog, setCatalog] = useState({});
+  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
+  const [assignments, setAssignments] = useState({});
   const [filter, setFilter] = useState("all");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState([]);
   const [editSessionKey, setEditSessionKey] = useState(null);
-  const [activeEx, setActiveEx] = useState(null);
+  const [activeEntry, setActiveEntry] = useState(null);
   const [activeSets, setActiveSets] = useState([]);
-  const [cardioMinutes, setCardioMinutes] = useState("");
-  const [cardioKm, setCardioKm] = useState("");
-  const [cardioSteps, setCardioSteps] = useState("");
-  const [cardioConfig, setCardioConfig] = useState(DEFAULT_CARDIO_CONFIG);
+  const [cardioValues, setCardioValues] = useState({});
   const [activeWeightKg, setActiveWeightKg] = useState("");
   const [pastLogModalVisible, setPastLogModalVisible] = useState(false);
   const [pastLogDate, setPastLogDate] = useState(null);
-  const [pastLogDow, setPastLogDow] = useState(null);
+  const [pastLogWorkoutId, setPastLogWorkoutId] = useState(null);
   const [pastLogPickerDate, setPastLogPickerDate] = useState(new Date());
   const [showPastLogDatePicker, setShowPastLogDatePicker] = useState(false);
   const [activeDayLogger, setActiveDayLogger] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
-      Promise.all([loadSessions(), loadWorkoutPlan(), loadCardioConfig()]).then(
-        ([s, savedPlan, savedCardioConfig]) => {
-          setSessions(s);
-          setCardioConfig(savedCardioConfig || DEFAULT_CARDIO_CONFIG);
-          const liveConfig = savedCardioConfig || DEFAULT_CARDIO_CONFIG;
-          setPlanMap(applyCardioConfigToPlan(savedPlan || PLAN, liveConfig));
+      Promise.all([
+        loadSessions(),
+        loadWorkoutPlan(),
+        loadCardioConfig(),
+        loadCatalog(),
+        loadDayOverrides(),
+      ]).then(
+        ([savedSessions, savedPlan, savedCardio, savedCatalog, savedAssignments]) => {
+          const liveConfig = savedCardio || DEFAULT_CARDIO_CONFIG;
+          setSessions(savedSessions);
+          setCardioConfig(liveConfig);
+          setCatalog(savedCatalog || {});
+          setAssignments(savedAssignments || {});
+          setPlan(applyCardioConfigToPlan(savedPlan || DEFAULT_PLAN, liveConfig));
         },
       );
     }, []),
@@ -96,8 +120,8 @@ export default function HistoryScreen() {
   useFocusEffect(
     useCallback(() => {
       const onHardwareBackPress = () => {
-        if (editSessionKey && activeEx) {
-          setActiveEx(null);
+        if (editSessionKey && activeEntry) {
+          setActiveEntry(null);
           return true;
         }
         if (editSessionKey) {
@@ -112,16 +136,15 @@ export default function HistoryScreen() {
         onHardwareBackPress,
       );
       return () => subscription.remove();
-    }, [editSessionKey, activeEx]),
+    }, [editSessionKey, activeEntry]),
   );
 
   const filteredKeys = getFilteredKeys(sessions, filter).slice().reverse();
-
   const selectedCount = selectedKeys.length;
 
   const toggleSelect = (key) => {
     setSelectedKeys((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
     );
   };
 
@@ -143,13 +166,13 @@ export default function HistoryScreen() {
   const deleteSessionKeys = async (keys) => {
     if (!keys.length) return;
     const next = { ...sessions };
-    keys.forEach((k) => {
-      delete next[k];
+    keys.forEach((key) => {
+      delete next[key];
     });
     setSessions(next);
     await saveSessions(next);
-    for (const k of keys) {
-      await saveRestDay(k, false);
+    for (const key of keys) {
+      await saveRestDay(key, false);
     }
   };
 
@@ -182,7 +205,7 @@ export default function HistoryScreen() {
           await deleteSessionKeys([key]);
           if (editSessionKey === key) {
             setEditSessionKey(null);
-            setActiveEx(null);
+            setActiveEntry(null);
           }
         },
       },
@@ -191,196 +214,126 @@ export default function HistoryScreen() {
 
   const openSessionEditor = (key) => {
     setEditSessionKey(key);
-    setActiveEx(null);
+    setActiveEntry(null);
     setActiveWeightKg("");
-  };
-
-  const syncPastLogDate = (date) => {
-    if (!date) return;
-    setPastLogPickerDate(date);
-    setPastLogDate(dateToKey(date));
-    setPastLogDow(date.getDay());
-  };
-
-  const openPastLogModal = () => {
-    const today = new Date();
-    syncPastLogDate(today);
-    setPastLogModalVisible(true);
-  };
-
-  const openPastLogDatePicker = () => {
-    setShowPastLogDatePicker(true);
   };
 
   const closeSessionEditor = () => {
     setEditSessionKey(null);
-    setActiveEx(null);
+    setActiveEntry(null);
     setActiveWeightKg("");
   };
+
+  const sessionWorkout = (sessionKey) =>
+    getWorkoutById(plan, sessions[sessionKey]?._workoutId);
 
   const sessionExerciseList = (sessionKey) => {
     const session = sessions[sessionKey] || {};
-    const dow = session._dow;
-    const day = planMap[dow];
-    const localRenames = session._localRenames || {};
-
-    const planned = day?.groups?.flatMap((g) => g.exercises) || [];
-    const existing = Object.keys(session).filter(
-      (k) =>
-        !k.startsWith("_") &&
-        (Array.isArray(session[k]) ||
-          (typeof session[k] === "object" && session[k] !== null)),
-    );
-    const unique = [];
-    planned.forEach((ex) => {
-      const displayName = localRenames[ex] || ex;
-      if (!unique.includes(displayName)) unique.push(displayName);
-    });
-    const renamedValues = Object.values(localRenames);
-    existing.forEach((keyOrName) => {
-      const isCardio = isCardioExercise(keyOrName, cardioConfig);
-      const displayName = isCardio 
-        ? (getCardioEntry(keyOrName, cardioConfig)?.name || keyOrName) 
-        : keyOrName;
-      // Skip keys that are the result of a local rename — they're already represented
-      if (renamedValues.includes(displayName)) return;
-      // Skip internal keys
-      if (keyOrName.startsWith("_")) return;
-      if (!unique.includes(displayName)) unique.push(displayName);
-    });
-    return unique;
+    return getLoggedSessionEntries(session, cardioConfig);
   };
 
-  const openExerciseEditor = (exerciseName) => {
-    const session = sessions[editSessionKey] || {};
-    const localRenames = session._localRenames || {};
-    const isCardio = isCardioExercise(exerciseName, cardioConfig);
-    const storageKey = isCardio
-      ? (getCardioEntry(exerciseName, cardioConfig)?.id || exerciseName)
-      : (localRenames[exerciseName] || exerciseName);
-    
-    let existing = sessions[editSessionKey]?.[storageKey];
-    if (existing === undefined && isCardio) {
-      const entry = getCardioEntry(exerciseName, cardioConfig);
-      if (entry && sessions[editSessionKey]?.[entry.name] !== undefined) {
-        existing = sessions[editSessionKey][entry.name];
-      }
-    }
+  const openLogMore = (sessionKey) => {
+    const workoutId = sessions[sessionKey]?._workoutId || null;
+    setEditSessionKey(null);
+    setActiveEntry(null);
+    setActiveDayLogger({ dateKey: sessionKey, workoutId });
+  };
 
-    if (isCardio) {
-      const entry = existing;
-      if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-        setCardioMinutes(String(entry.minutes ?? entry.m ?? ""));
-        setCardioKm(String(entry.km ?? ""));
-        setCardioSteps(String(entry.steps ?? ""));
-      } else {
-        setCardioMinutes("");
-        setCardioKm("");
-        setCardioSteps("");
-      }
-      setActiveSets([]);
-      setActiveEx(exerciseName);
-      return;
-    }
-    if (isWeightExercise(storageKey)) {
-      setActiveWeightKg(
-        existing && typeof existing === "object"
-          ? String(existing.kg ?? "")
-          : "",
-      );
-      setActiveSets([]);
-      setCardioMinutes("");
-      setCardioKm("");
-      setActiveEx(storageKey);
-      return;
-    }
-    const cardio = isCardioExercise(storageKey, cardioConfig);
-    if (existing?.length) {
-      if (cardio) {
-        const total = existing.reduce((a, s) => a + (parseFloat(s.m) || 0), 0);
-        setActiveSets([
-          { label: "Minute Slot 1", m: total > 0 ? String(total) : "" },
-        ]);
-      } else {
-        setActiveSets(normalizeWorkoutSets(existing));
-      }
-    } else {
-      setActiveSets(createWorkoutSets());
-    }
-    setCardioMinutes("");
-    setCardioKm("");
+  const openExerciseEditor = (info) => {
+    setActiveEntry(info);
+    setCardioValues({});
     setActiveWeightKg("");
-    setActiveEx(storageKey);
+    setActiveSets([]);
+
+    if (info.kind === "cardio") {
+      setCardioValues(normalizeCardioValues(info.entry));
+      return;
+    }
+    if (info.kind === "weight") {
+      setActiveWeightKg(String(info.entry?.kg ?? ""));
+      return;
+    }
+    setActiveSets(
+      Array.isArray(info.entry) && info.entry.length > 0
+        ? normalizeWorkoutSets(info.entry)
+        : createWorkoutSets(),
+    );
   };
 
-  const updateSet = (i, field, val) => {
-    const next = [...activeSets];
-    next[i] = { ...next[i], [field]: val };
-    setActiveSets(next);
+  const updateSet = (index, field, value) => {
+    setActiveSets((prev) =>
+      prev.map((set, i) => (i === index ? { ...set, [field]: value } : set)),
+    );
   };
 
   const saveExerciseEdits = async () => {
-    const next = { ...sessions };
+    if (!activeEntry || !editSessionKey) return;
+    const next = JSON.parse(JSON.stringify(sessions));
     if (!next[editSessionKey]) return;
-    
-    const isCardio = isCardioExercise(activeEx, cardioConfig);
-    const storageKey = isCardio
-      ? (getCardioEntry(activeEx, cardioConfig)?.id || activeEx)
-      : activeEx;
 
-    if (isWeightExercise(storageKey)) {
-      next[editSessionKey][storageKey] = { kg: activeWeightKg };
-    } else if (isCardio) {
-      next[editSessionKey][storageKey] = {
-        minutes: cardioMinutes,
-        km: cardioKm,
-        steps: cardioSteps,
-      };
-      if (storageKey !== activeEx) {
-        delete next[editSessionKey][activeEx];
+    if (activeEntry.kind === "weight") {
+      const kg = String(activeWeightKg || "").trim();
+      if (kg) next[editSessionKey][activeEntry.key] = { kg };
+      else delete next[editSessionKey][activeEntry.key];
+    } else if (activeEntry.kind === "cardio") {
+      if (hasCardioValues(cardioValues)) {
+        next[editSessionKey][activeEntry.key] =
+          normalizeCardioValues(cardioValues);
+      } else {
+        delete next[editSessionKey][activeEntry.key];
+      }
+      if (
+        activeEntry.name !== activeEntry.key &&
+        next[editSessionKey][activeEntry.name] !== undefined
+      ) {
+        delete next[editSessionKey][activeEntry.name];
       }
     } else {
-      next[editSessionKey][storageKey] = normalizeWorkoutSets(activeSets);
+      const sets = cleanWorkoutSets(activeSets);
+      if (sets.length > 0) next[editSessionKey][activeEntry.key] = sets;
+      else delete next[editSessionKey][activeEntry.key];
     }
+
     setSessions(next);
     await saveSessions(next);
-    setActiveEx(null);
+    setActiveEntry(null);
   };
 
   const deleteExerciseFromSession = () => {
+    if (!activeEntry) return;
     Alert.alert(
       "Remove exercise data",
-      `Delete all logged sets for ${activeEx} in this session?`,
+      `Delete all logged data for ${activeEntry.name} in this session?`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
-            const next = { ...sessions };
-            if (
-              next[editSessionKey] &&
-              Object.prototype.hasOwnProperty.call(
-                next[editSessionKey],
-                activeEx,
-              )
-            ) {
-              delete next[editSessionKey][activeEx];
-              setSessions(next);
-              await saveSessions(next);
+            const next = JSON.parse(JSON.stringify(sessions));
+            if (next[editSessionKey]) {
+              delete next[editSessionKey][activeEntry.key];
+              if (
+                activeEntry.name !== activeEntry.key &&
+                next[editSessionKey][activeEntry.name] !== undefined
+              ) {
+                delete next[editSessionKey][activeEntry.name];
+              }
             }
-            setActiveEx(null);
+            setSessions(next);
+            await saveSessions(next);
+            setActiveEntry(null);
           },
         },
       ],
     );
   };
 
-  const exportForLLM = async () => {
+  const exportCSV = async () => {
     try {
-      const csv = buildCSVExport(sessions, planMap, cardioConfig);
+      const csv = buildCSVExport(sessions, plan, catalog, cardioConfig);
       await Share.share({
-        title: "Workout Data Export",
+        title: "Workout CSV export",
         message: csv,
       });
     } catch {
@@ -391,17 +344,44 @@ export default function HistoryScreen() {
     }
   };
 
-  if (editSessionKey && activeEx) {
-    const activeIsCardio = isCardioExercise(activeEx, cardioConfig);
-    const activeIsWeight = isWeightExercise(activeEx);
-    const totalVol = activeIsCardio
-      ? parseFloat(cardioMinutes) || 0
-      : activeIsWeight
-        ? 0
-        : activeSets.reduce(
-            (a, s) => a + (parseFloat(s.w) || 0) * (parseInt(s.r) || 0),
-            0,
-          );
+  const exportJSON = async () => {
+    try {
+      const payload = buildLLMExportPayload(
+        sessions,
+        plan,
+        catalog,
+        cardioConfig,
+      );
+      await Share.share({
+        title: "Workout JSON export",
+        message: JSON.stringify(payload, null, 2),
+      });
+    } catch {
+      Alert.alert(
+        "Export failed",
+        "Could not export workout data. Please try again.",
+      );
+    }
+  };
+
+  const syncPastLogDate = (date) => {
+    if (!date) return;
+    const key = dateToKey(date);
+    const context = getWorkoutForDate(plan, sessions, assignments, key);
+    setPastLogPickerDate(date);
+    setPastLogDate(key);
+    setPastLogWorkoutId(context.workout?.id || null);
+  };
+
+  const openPastLogModal = () => {
+    syncPastLogDate(new Date());
+    setPastLogModalVisible(true);
+  };
+
+  if (editSessionKey && activeEntry) {
+    const timed =
+      activeEntry.kind === "strength" &&
+      isTimedExercise(activeEntry.name, catalog);
     return (
       <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
         <View
@@ -415,13 +395,13 @@ export default function HistoryScreen() {
               s.backChip,
               { backgroundColor: t.inputBg, borderColor: t.border },
             ]}
-            onPress={() => setActiveEx(null)}
+            onPress={() => setActiveEntry(null)}
           >
             <Ionicons name="chevron-back" size={16} color={t.accent} />
             <Text style={[s.backChipText, { color: t.accent }]}>Session</Text>
           </TouchableOpacity>
           <Text style={[s.topTitle, { color: t.text }]} numberOfLines={1}>
-            {activeEx}
+            {activeEntry.name}
           </Text>
           <Text style={[s.topSub, { color: t.textSub }]}>
             Edit past workout entry
@@ -439,21 +419,20 @@ export default function HistoryScreen() {
               { backgroundColor: t.surface, borderColor: t.border },
             ]}
           >
-            {activeIsCardio && (
+            {activeEntry.kind === "cardio" && (
               <CardioLogger
-                exerciseName={activeEx}
-                cardioConfig={cardioConfig}
-                minutes={cardioMinutes}
-                onMinutesChange={setCardioMinutes}
-                km={cardioKm}
-                onKmChange={setCardioKm}
-                steps={cardioSteps}
-                onStepsChange={setCardioSteps}
+                entry={cardioValues}
+                onChange={setCardioValues}
+                configEntry={
+                  activeEntry.config ||
+                  getCardioEntry(activeEntry.name, cardioConfig)
+                }
                 theme={t}
                 styles={s}
               />
             )}
-            {!activeIsCardio && activeIsWeight ? (
+
+            {activeEntry.kind === "weight" && (
               <>
                 <View
                   style={[
@@ -482,118 +461,21 @@ export default function HistoryScreen() {
                     placeholder="kg"
                     placeholderTextColor={t.textHint}
                     keyboardType="decimal-pad"
+                    accessibilityLabel="Body weight in kilograms"
                   />
                 </View>
               </>
-            ) : !activeIsCardio ? (
-              <>
-                <View
-                  style={[
-                    s.setHeader,
-                    { borderBottomColor: t.border, backgroundColor: t.inputBg },
-                  ]}
-                >
-                  <Text style={[s.setColHdr, { flex: 1.4, color: t.textHint }]}>
-                    Set
-                  </Text>
-                  <Text
-                    style={[
-                      s.setColHdr,
-                      { flex: 1, textAlign: "center", color: t.textHint },
-                    ]}
-                  >
-                    Weight kg
-                  </Text>
-                  <Text
-                    style={[
-                      s.setColHdr,
-                      { flex: 1, textAlign: "center", color: t.textHint },
-                    ]}
-                  >
-                    Reps
-                  </Text>
-                  <Text
-                    style={[
-                      s.setColHdr,
-                      { flex: 0.8, textAlign: "right", color: t.textHint },
-                    ]}
-                  >
-                    Vol
-                  </Text>
-                </View>
+            )}
 
-                {activeSets.map((set, i) => {
-                  const vol = (parseFloat(set.w) || 0) * (parseInt(set.r) || 0);
-                  return (
-                    <View
-                      key={i}
-                      style={[s.setRow, { borderTopColor: t.border }]}
-                    >
-                      <Text
-                        style={[
-                          s.setLabel,
-                          { color: t.textSub },
-                          { flex: 1.4 },
-                        ]}
-                      >
-                        {set.label}
-                      </Text>
-                      <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                        <TextInput
-                          style={[
-                            s.numInput,
-                            {
-                              backgroundColor: t.inputBg,
-                              borderColor: t.border,
-                              color: t.text,
-                            },
-                          ]}
-                          value={set.w}
-                          onChangeText={(v) => updateSet(i, "w", v)}
-                          placeholder="kg"
-                          placeholderTextColor={t.textHint}
-                          keyboardType="decimal-pad"
-                        />
-                      </View>
-                      <View style={{ flex: 1, paddingHorizontal: 4 }}>
-                        <TextInput
-                          style={[
-                            s.numInput,
-                            {
-                              backgroundColor: t.inputBg,
-                              borderColor: t.border,
-                              color: t.text,
-                            },
-                          ]}
-                          value={set.r}
-                          onChangeText={(v) => updateSet(i, "r", v)}
-                          placeholder="reps"
-                          placeholderTextColor={t.textHint}
-                          keyboardType="number-pad"
-                        />
-                      </View>
-                      <Text
-                        style={[
-                          s.setVol,
-                          { flex: 0.8, color: vol > 0 ? t.accent : t.textHint },
-                        ]}
-                      >
-                        {vol > 0 ? Math.round(vol) + "" : "-"}{" "}
-                      </Text>
-                    </View>
-                  );
-                })}
-
-                <View style={[s.totalRow, { borderTopColor: t.border }]}>
-                  <Text style={[s.totalLabel, { color: t.textSub }]}>
-                    Total volume
-                  </Text>
-                  <Text
-                    style={[s.totalVal, { color: t.text }]}
-                  >{`${Math.round(totalVol).toLocaleString()} kg`}</Text>
-                </View>
-              </>
-            ) : null}
+            {activeEntry.kind === "strength" && (
+              <SetInputs
+                sets={activeSets}
+                timed={timed}
+                onChange={updateSet}
+                theme={t}
+                styles={s}
+              />
+            )}
           </View>
 
           <View style={s.actionRow}>
@@ -624,9 +506,8 @@ export default function HistoryScreen() {
 
   if (editSessionKey) {
     const session = sessions[editSessionKey] || {};
-    const dow = session._dow;
-    const day = planMap[dow];
-    const exercises = sessionExerciseList(editSessionKey);
+    const workout = sessionWorkout(editSessionKey);
+    const entries = sessionExerciseList(editSessionKey);
     return (
       <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
         <View
@@ -648,7 +529,7 @@ export default function HistoryScreen() {
           <Text style={[s.topTitle, { color: t.text }]}>Edit session</Text>
           <Text style={[s.topSub, { color: t.textSub }]}>
             {formatDate(editSessionKey)}
-            {day ? ` · ${day.label}` : ""}
+            {workout ? ` · ${session._label || workout.label}` : ""}
           </Text>
         </View>
 
@@ -656,60 +537,50 @@ export default function HistoryScreen() {
           style={s.scroll}
           contentContainerStyle={{ paddingBottom: 18 }}
         >
-          {exercises.map((ex) => {
-            const isCardio = isCardioExercise(ex, cardioConfig);
-            const storageKey = isCardio ? (getCardioEntry(ex, cardioConfig)?.id || ex) : ex;
-            let entry = session[storageKey];
-            if (entry === undefined && isCardio) {
-              const cardioEntry = getCardioEntry(ex, cardioConfig);
-              if (cardioEntry && session[cardioEntry.name] !== undefined) {
-                entry = session[cardioEntry.name];
-              }
+          {entries.map((entry) => {
+            const logged = isEntryLogged(entry);
+            let subtitle = "Not logged";
+            if (entry.kind === "weight") {
+              const kg = entry.entry?.kg;
+              subtitle = kg ? `${kg} kg` : "Not logged";
+            } else if (entry.kind === "cardio") {
+              subtitle = getCardioSummary(entry.entry, entry.config);
+            } else if (logged) {
+              const sets = cleanWorkoutSets(entry.entry);
+              const volume = sets.reduce(
+                (sum, set) =>
+                  sum +
+                  (parseFloat(set.w) || 0) * (parseInt(set.r, 10) || 0),
+                0,
+              );
+              subtitle = `${sets.length} set${sets.length !== 1 ? "s" : ""} · ${Math.round(volume).toLocaleString()} kg`;
             }
-            const sets = Array.isArray(entry) ? entry : [];
-            const vol = sets.reduce(
-              (a, row) => a + (parseFloat(row.w) || 0) * (parseInt(row.r) || 0),
-              0,
-            );
+
             return (
               <TouchableOpacity
-                key={ex}
+                key={`${entry.kind}:${entry.key}`}
                 style={[
                   s.editRow,
                   { backgroundColor: t.surface, borderColor: t.border },
                 ]}
-                onPress={() => openExerciseEditor(ex)}
+                onPress={() => openExerciseEditor(entry)}
               >
                 <View style={{ flex: 1 }}>
-                  <Text style={[s.editRowTitle, { color: t.text }]}>{ex}</Text>
+                  <View style={s.editRowTitleRow}>
+                    <Text style={[s.editRowTitle, { color: t.text }]}>
+                      {entry.name}
+                    </Text>
+                    {entry.kind === "strength" &&
+                      isTimedExercise(entry.name, catalog) && (
+                        <Ionicons
+                          name="time-outline"
+                          size={13}
+                          color={t.textHint}
+                        />
+                      )}
+                  </View>
                   <Text style={[s.editRowSub, { color: t.textSub }]}>
-                    {isWeightExercise(ex)
-                      ? (() => {
-                          const kg =
-                            entry && typeof entry === "object"
-                              ? entry.kg
-                              : null;
-                          return kg ? `${kg} kg` : "Not logged";
-                        })()
-                      : isCardio
-                        ? (() => {
-                            if (!entry || typeof entry !== "object")
-                              return "Not logged";
-                            const metric = cardioMetric(ex, cardioConfig);
-                            const parts = [];
-                            if (entry.minutes)
-                              parts.push(`${entry.minutes} min`);
-                            if (entry.steps)
-                              parts.push(
-                                `${parseInt(entry.steps).toLocaleString()} steps`,
-                              );
-                            if (entry.km && cardioHasDistance(ex, cardioConfig))
-                              parts.push(`${entry.km} km`);
-                            return parts.length > 0
-                              ? parts.join(" · ")
-                              : "Not logged";
-                          })()
-                        : `${sets.length} set${sets.length !== 1 ? "s" : ""} · ${Math.round(vol).toLocaleString()} kg`}
+                    {subtitle}
                   </Text>
                 </View>
                 <Ionicons name="create-outline" size={18} color={t.accent} />
@@ -717,16 +588,33 @@ export default function HistoryScreen() {
             );
           })}
 
-          {exercises.length === 0 && (
+          {entries.length === 0 && (
             <View style={s.empty}>
               <Text style={[s.emptyTitle, { color: t.text }]}>
-                No exercise data
+                No exercises logged
               </Text>
               <Text style={[s.emptySub, { color: t.textSub }]}>
-                This session has no logged sets to edit.
+                Use Log more exercises to add the exercises you did.
               </Text>
             </View>
           )}
+
+          <TouchableOpacity
+            style={[
+              s.logMoreBtn,
+              { borderColor: t.accent, backgroundColor: t.inputBg },
+            ]}
+            onPress={() => openLogMore(editSessionKey)}
+          >
+            <Ionicons
+              name="add-circle-outline"
+              size={16}
+              color={t.accent}
+            />
+            <Text style={[s.logMoreBtnText, { color: t.accent }]}>
+              Log more exercises
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={[
@@ -735,8 +623,12 @@ export default function HistoryScreen() {
             ]}
             onPress={() => deleteSingleSession(editSessionKey)}
           >
-            <Ionicons name="trash-outline" size={16} color={t.destructiveColor} />
-            <Text style={[s.deleteSessionBtnText, { color: t.destructiveColor }]}> 
+            <Ionicons
+              name="trash-outline"
+              size={16}
+              color={t.destructiveColor}
+            />
+            <Text style={[s.deleteSessionBtnText, { color: t.destructiveColor }]}>
               Delete this session
             </Text>
           </TouchableOpacity>
@@ -749,12 +641,12 @@ export default function HistoryScreen() {
     return (
       <DayLogger
         dateKey={activeDayLogger.dateKey}
-        dow={activeDayLogger.dow}
-        isPastLog={true}
+        initialWorkoutId={activeDayLogger.workoutId}
+        isPastLog
         onClose={() => {
           setActiveDayLogger(null);
           setPastLogDate(null);
-          setPastLogDow(null);
+          setPastLogWorkoutId(null);
           loadSessions().then(setSessions);
         }}
       />
@@ -793,9 +685,7 @@ export default function HistoryScreen() {
                 onPress={toggleSelectAllVisible}
               >
                 <Text style={[s.smallBtnText, { color: t.text }]}>
-                  {selectedKeys.length === filteredKeys.length
-                    ? "Clear"
-                    : "All"}
+                  {selectedKeys.length === filteredKeys.length ? "Clear" : "All"}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -805,7 +695,11 @@ export default function HistoryScreen() {
                 ]}
                 onPress={deleteSelected}
               >
-                <Ionicons name="trash-outline" size={14} color={t.destructiveColor} />
+                <Ionicons
+                  name="trash-outline"
+                  size={14}
+                  color={t.destructiveColor}
+                />
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -833,12 +727,13 @@ export default function HistoryScreen() {
             </View>
           )}
         </View>
+
         {!selectionMode && (
           <View style={s.topbarSecondaryRow}>
             <TouchableOpacity
               style={[
                 s.exportBtn,
-                { borderColor: t.border, backgroundColor: t.inputBg, flex: 1, alignItems: "center" },
+                { borderColor: t.border, backgroundColor: t.inputBg, flex: 1 },
               ]}
               onPress={openPastLogModal}
             >
@@ -849,17 +744,27 @@ export default function HistoryScreen() {
             <TouchableOpacity
               style={[
                 s.exportBtn,
-                { borderColor: t.border, backgroundColor: t.inputBg, flex: 1, alignItems: "center" },
+                { borderColor: t.border, backgroundColor: t.inputBg, flex: 1 },
               ]}
-              onPress={exportForLLM}
+              onPress={exportCSV}
+            >
+              <Text style={[s.exportBtnText, { color: t.text }]}>CSV</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                s.exportBtn,
+                { borderColor: t.border, backgroundColor: t.inputBg, flex: 1 },
+              ]}
+              onPress={exportJSON}
             >
               <Text style={[s.exportBtnText, { color: t.text }]}>
-                Export CSV
+                LLM JSON
               </Text>
             </TouchableOpacity>
           </View>
         )}
       </View>
+
       <ScrollView
         style={s.scroll}
         contentContainerStyle={{ paddingBottom: 16 }}
@@ -893,38 +798,33 @@ export default function HistoryScreen() {
 
         {filteredKeys.length === 0 && (
           <View style={s.empty}>
-            <View style={[s.emptyIcon, { backgroundColor: t.inputBg, borderColor: t.border }]}>
+            <View
+              style={[
+                s.emptyIcon,
+                { backgroundColor: t.inputBg, borderColor: t.border },
+              ]}
+            >
               <Ionicons name="calendar-outline" size={28} color={t.textSub} />
             </View>
-            <Text style={[s.emptyTitle, { color: t.text }]}>
-              No sessions yet
-            </Text>
+            <Text style={[s.emptyTitle, { color: t.text }]}>No sessions yet</Text>
             <Text style={[s.emptySub, { color: t.textSub }]}>
-              Head to Today, select an exercise, and log your first workout to see it here.
+              Head to Today, choose an exercise, and log your first workout to
+              see it here.
             </Text>
           </View>
         )}
 
-        {filteredKeys.map((k) => {
-          const dow = sessions[k]?._dow;
-          const day = planMap[dow];
-          const isRest = !!sessions[k]?._rest;
-          const vol = getSessionVolume(sessions[k]);
-          const selected = selectedKeys.includes(k);
-          const musclesDone =
-            day?.groups.filter((g) => {
-              if (g.name === "Cardio" || g.name === "Weight") return false;
-              return g.exercises.some((ex) => {
-                const localRenames = sessions[k]?._localRenames || {};
-                const sessionKey = localRenames[ex] || ex;
-                const entry = sessions[k]?.[sessionKey];
-                return Array.isArray(entry) && entry.length > 0;
-              });
-            }) || [];
+        {filteredKeys.map((key) => {
+          const session = sessions[key] || {};
+          const workout = sessionWorkout(key);
+          const isRest = !!session._rest;
+          const volume = getSessionVolume(session);
+          const selected = selectedKeys.includes(key);
+          const muscles = getSessionMuscleTags(session, catalog, cardioConfig);
 
           return (
             <TouchableOpacity
-              key={k}
+              key={key}
               style={[
                 s.histItem,
                 {
@@ -932,9 +832,9 @@ export default function HistoryScreen() {
                   borderColor: selected ? t.accent : t.border,
                 },
               ]}
-              onLongPress={() => startSelection(k)}
+              onLongPress={() => startSelection(key)}
               onPress={() =>
-                selectionMode ? toggleSelect(k) : openSessionEditor(k)
+                selectionMode ? toggleSelect(key) : openSessionEditor(key)
               }
               activeOpacity={0.9}
             >
@@ -946,7 +846,9 @@ export default function HistoryScreen() {
                         s.checkbox,
                         {
                           borderColor: selected ? t.accent : t.borderStrong,
-                          backgroundColor: selected ? t.accent : "transparent",
+                          backgroundColor: selected
+                            ? t.accent
+                            : "transparent",
                         },
                       ]}
                     >
@@ -956,13 +858,13 @@ export default function HistoryScreen() {
                     </View>
                   )}
                   <Text style={[s.histDate, { color: t.textHint }]}>
-                    {formatDate(k)}
+                    {formatDate(key)}
                   </Text>
                 </View>
                 <View style={s.histRightRow}>
-                  {vol > 0 && (
+                  {volume > 0 && (
                     <Text style={[s.histVol, { color: t.accent }]}>
-                      {vol.toLocaleString()} kg
+                      {volume.toLocaleString()} kg
                     </Text>
                   )}
                   {!selectionMode && (
@@ -975,7 +877,7 @@ export default function HistoryScreen() {
                 </View>
               </View>
               <Text style={[s.histDay, { color: t.text }]}>
-                {day ? day.label : "Session"}
+                {session._label || workout?.label || "Session"}
               </Text>
               {isRest && (
                 <View
@@ -991,44 +893,24 @@ export default function HistoryScreen() {
                 </View>
               )}
               <View style={s.tagRow}>
-                {musclesDone.map((g) => (
-                  <View
-                    key={g.name}
-                    style={[
-                      s.tag,
-                      {
-                        backgroundColor:
-                          (MUSCLE_COLORS[g.name] || g.color || t.textSub) +
-                          "28",
-                      },
-                    ]}
-                  >
+                {muscles.map((muscle) => {
+                  const color = MUSCLE_COLORS[muscle] || MUSCLE_COLORS.Other;
+                  return (
                     <View
-                      style={[
-                        s.tagDot,
-                        {
-                          backgroundColor:
-                            MUSCLE_COLORS[g.name] || g.color || t.textSub,
-                        },
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        s.tagText,
-                        {
-                          color: MUSCLE_COLORS[g.name] || g.color || t.textSub,
-                        },
-                      ]}
+                      key={muscle}
+                      style={[s.tag, { backgroundColor: color + "28" }]}
                     >
-                      {g.name}
-                    </Text>
-                  </View>
-                ))}
+                      <View style={[s.tagDot, { backgroundColor: color }]} />
+                      <Text style={[s.tagText, { color }]}>{muscle}</Text>
+                    </View>
+                  );
+                })}
               </View>
             </TouchableOpacity>
           );
         })}
       </ScrollView>
+
       <Modal
         visible={pastLogModalVisible}
         transparent
@@ -1046,35 +928,32 @@ export default function HistoryScreen() {
               Log a past day
             </Text>
             <Text style={[s.pastLogSub, { color: t.textSub }]}>
-              Pick the date you want to log, and which day's exercises to use.
+              Pick the date, then choose which workout template to log.
             </Text>
 
             <Text style={[s.pastLogLabel, { color: t.textSub }]}>Date</Text>
             <TouchableOpacity
               style={[
                 s.pastLogDateBtn,
-                {
-                  backgroundColor: t.inputBg,
-                  borderColor: t.border,
-                },
+                { backgroundColor: t.inputBg, borderColor: t.border },
               ]}
-              onPress={openPastLogDatePicker}
+              onPress={() => setShowPastLogDatePicker(true)}
             >
               <Ionicons name="calendar-outline" size={16} color={t.accent} />
-              <Text style={[s.pastLogDateText, { color: t.text }]}> 
+              <Text style={[s.pastLogDateText, { color: t.text }]}>
                 {pastLogDate ? formatDate(pastLogDate) : "Choose a date"}
               </Text>
             </TouchableOpacity>
+
             {(Platform.OS === "ios" || showPastLogDatePicker) && (
               <View style={s.pastLogPickerWrap}>
                 <DateTimePicker
                   value={pastLogPickerDate}
                   mode="date"
+                  maximumDate={new Date()}
                   display={Platform.OS === "android" ? "calendar" : "spinner"}
                   onChange={(_, selectedDate) => {
-                    if (selectedDate) {
-                      syncPastLogDate(selectedDate);
-                    }
+                    if (selectedDate) syncPastLogDate(selectedDate);
                     if (Platform.OS !== "ios") {
                       setShowPastLogDatePicker(false);
                     }
@@ -1083,37 +962,37 @@ export default function HistoryScreen() {
               </View>
             )}
 
-            <Text style={[s.pastLogLabel, { color: t.textSub, marginTop: 14 }]}>
-              Which day's exercises?
+            <Text
+              style={[s.pastLogLabel, { color: t.textSub, marginTop: 14 }]}
+            >
+              Workout
             </Text>
             <View style={s.pastLogDayRow}>
-              {[
-                { label: "Mon", dow: 1 },
-                { label: "Tue", dow: 2 },
-                { label: "Wed", dow: 3 },
-                { label: "Thu", dow: 4 },
-                { label: "Fri", dow: 5 },
-                { label: "Sat", dow: 6 },
-              ].map((d) => (
+              {getWorkouts(plan).map((workout) => (
                 <TouchableOpacity
-                  key={d.dow}
+                  key={workout.id}
                   style={[
                     s.pastLogDayBtn,
                     {
                       borderColor: t.border,
                       backgroundColor:
-                        pastLogDow === d.dow ? t.accent : t.inputBg,
+                        pastLogWorkoutId === workout.id
+                          ? t.accent
+                          : t.inputBg,
                     },
                   ]}
-                  onPress={() => setPastLogDow(d.dow)}
+                  onPress={() => setPastLogWorkoutId(workout.id)}
                 >
                   <Text
                     style={[
                       s.pastLogDayBtnText,
-                      { color: pastLogDow === d.dow ? "#fff" : t.text },
+                      {
+                        color:
+                          pastLogWorkoutId === workout.id ? "#fff" : t.text,
+                      },
                     ]}
                   >
-                    {d.label}
+                    {workout.label}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -1128,7 +1007,7 @@ export default function HistoryScreen() {
                 onPress={() => {
                   setPastLogModalVisible(false);
                   setPastLogDate(null);
-                  setPastLogDow(null);
+                  setPastLogWorkoutId(null);
                 }}
               >
                 <Text style={[s.secondaryBtnText, { color: t.textSub }]}>
@@ -1138,14 +1017,17 @@ export default function HistoryScreen() {
               <TouchableOpacity
                 style={[s.primaryBtn, { backgroundColor: t.accent }]}
                 onPress={() => {
-                  if (!pastLogDate || pastLogDow === null) {
+                  if (!pastLogDate || !pastLogWorkoutId) {
                     Alert.alert(
                       "Missing info",
-                      "Please choose a date and select a day.",
+                      "Please choose a date and a workout.",
                     );
                     return;
                   }
-                  setActiveDayLogger({ dateKey: pastLogDate, dow: pastLogDow });
+                  setActiveDayLogger({
+                    dateKey: pastLogDate,
+                    workoutId: pastLogWorkoutId,
+                  });
                   setPastLogModalVisible(false);
                 }}
               >
@@ -1184,6 +1066,7 @@ const s = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 7,
+    alignItems: "center",
     shadowColor: "#000",
     shadowOpacity: 0.06,
     shadowRadius: 6,
@@ -1299,6 +1182,11 @@ const s = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
+  editRowTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   editRowTitle: { fontSize: 13, fontWeight: "600" },
   editRowSub: { fontSize: 11, marginTop: 2 },
   deleteSessionBtn: {
@@ -1312,6 +1200,17 @@ const s = StyleSheet.create({
     marginTop: 8,
   },
   deleteSessionBtnText: { fontSize: 12, fontWeight: "600" },
+  logMoreBtn: {
+    borderWidth: 0.5,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 8,
+  },
+  logMoreBtnText: { fontSize: 12, fontWeight: "600" },
   card: { borderRadius: 14, borderWidth: 0.5, overflow: "hidden" },
   setHeader: {
     flexDirection: "row",
@@ -1362,10 +1261,7 @@ const s = StyleSheet.create({
     alignItems: "center",
   },
   primaryBtnText: { fontSize: 12, fontWeight: "700" },
-  pastLogOverlay: {
-    flex: 1,
-    justifyContent: "flex-end",
-  },
+  pastLogOverlay: { flex: 1, justifyContent: "flex-end" },
   pastLogSheet: {
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
