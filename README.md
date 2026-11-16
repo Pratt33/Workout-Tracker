@@ -32,6 +32,7 @@ Goals:
 - **Any 2 rest days**: Rest days can be any two days in the week. They do not consume a rotation slot, so the next training day simply continues the sequence. Log a workout on a rest-marked date at any time and the rest mark is removed.
 - **Exercise menus**: Every workout ships with at least 5 exercises, and any workout can hold more. Add another exercise in Settings, choose its muscle group and whether it tracks reps or time, and remove it later. Variants are separate exercises, so alternating Cable Crossover directions or row variations keeps each variant's own history.
 - **Logged-only history**: A past session shows only what you actually logged. "Log more exercises" opens the same logger for that date when you want to add more.
+- **Cardio stays independent**: Walking, Plank, and body-weight logs never advance the strength rotation, so you can walk on lifting or rest days without skipping a workout.
 - **7-day reset**: If the last logged workout is 7 or more days old, the rotation restarts at Push so a skipped week is easy to resume.
 - **Fresh start in 6.0**: History begins with this model. Any older data is archived on the device under a single legacy key instead of being converted. From here on, schema changes are additive migrations, so future updates keep every session.
 - **Timed exercises**: Any exercise can be switched between reps and time in Settings and stores seconds per set.

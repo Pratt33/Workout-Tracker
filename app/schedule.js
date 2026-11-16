@@ -1,5 +1,6 @@
 import { getWorkoutById, getWorkouts } from "./data";
 import { parseDateKey } from "./dates";
+import { hasLoggedSets } from "./workoutSets";
 
 // A long break means the old cycle no longer reflects the user's current
 // training. Restarting at the first workout keeps a skipped week simple.
@@ -7,6 +8,18 @@ export const ROTATION_RESET_DAYS = 7;
 
 export function isValidWorkoutId(plan, workoutId) {
   return !!getWorkoutById(plan, workoutId);
+}
+
+// Cardio and body-weight logs live in the same day as a session, but they are
+// not a strength workout. Only days with real strength sets advance the
+// Push > Pull > Legs > Upper > Lower rotation.
+export function hasLoggedStrengthWork(session) {
+  if (!session || typeof session !== "object") return false;
+  return Object.keys(session).some((key) => {
+    if (key.startsWith("_")) return false;
+    const value = session[key];
+    return Array.isArray(value) && hasLoggedSets(value);
+  });
 }
 
 export function getLastWorkoutIdBefore(plan, sessions, dateKey) {
@@ -21,6 +34,7 @@ export function getLastWorkoutIdBefore(plan, sessions, dateKey) {
     const session = sessions[keys[index]];
     if (!session?._workoutId) continue;
     if (!valid.has(session._workoutId)) continue;
+    if (!hasLoggedStrengthWork(session)) continue;
 
     const lastDate = parseDateKey(keys[index]);
     const currentDate = parseDateKey(dateKey);

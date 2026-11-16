@@ -2062,6 +2062,7 @@ export default function SettingsModal({
           "5 flexible workouts: Push, Pull, Legs, Upper, Lower.",
           "Each workout starts with 5 or more exercises; add or remove exercises any time.",
           "Choose any 2 rest days each week; rotation continues after rest.",
+          "Walking, Plank, and body weight never advance the strength rotation.",
           "After a 7+ day break, the rotation restarts at Push.",
           "Timed exercises store seconds per set; switch any exercise to Time tracking.",
           "Walking tracks duration, distance, speed, and incline.",

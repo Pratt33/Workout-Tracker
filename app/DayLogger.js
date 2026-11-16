@@ -11,6 +11,7 @@ import {
   Animated,
   BackHandler,
   Easing,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -417,10 +418,14 @@ export default function DayLogger({
       else delete existing[activeEx];
     }
 
+    // Cardio and body weight can be logged on a rest day without turning it
+    // into a strength session. Only real strength work clears a rest mark.
+    const isStrengthLog = didLog && info.kind === "strength";
+
     if (didLog) {
       existing._workoutId = workout.id;
-      existing._label = workout.label;
-      delete existing._rest;
+      if (isStrengthLog || !existing._rest) existing._label = workout.label;
+      if (isStrengthLog) delete existing._rest;
     }
 
     // Saving an untouched logger must not leave a metadata-only session behind:
@@ -435,7 +440,7 @@ export default function DayLogger({
     }
 
     await saveSessions(nextSessions);
-    if (didLog && isRestDay) {
+    if (isStrengthLog && isRestDay) {
       await saveRestDay(dateKey, false);
       setIsRestDay(false);
     }
@@ -564,6 +569,50 @@ export default function DayLogger({
     day: "numeric",
     month: "long",
   });
+
+  // Past-log mode never shows the rest view, so guard this render while the
+  // plan/session data is still loading. Without it, opening a past date could
+  // read workout.groups on null and close the app.
+  if (!workout) {
+    return (
+      <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
+        <View
+          style={[
+            s.topbar,
+            { backgroundColor: t.surface, borderBottomColor: t.border },
+          ]}
+        >
+          <View style={s.topbarRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.topTitle, { color: t.text }]}>
+                Loading workout
+              </Text>
+              <Text style={[s.topSub, { color: t.textSub }]}>
+                {headerDateLabel}
+              </Text>
+            </View>
+            <View style={s.topBarRight}>
+              <AppLogo theme={t} compact />
+              {onClose && (
+                <TouchableOpacity
+                  onPress={onClose}
+                  style={[
+                    s.closeBtn,
+                    { backgroundColor: t.inputBg, borderColor: t.border },
+                  ]}
+                >
+                  <Ionicons name="close" size={16} color={t.textSub} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+        <View style={s.loadingWrap}>
+          <ActivityIndicator color={t.accent} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (editingEx && workout) {
     return (
@@ -860,13 +909,11 @@ export default function DayLogger({
           <View style={{ flex: 1 }}>
             <View style={s.titleRow}>
               <Text style={[s.topTitle, { color: t.text }]}>
-                {isRestDay && showRestBanner
+                {!isPastLog && isRestDay && showRestBanner
                   ? "Rest Day"
-                  : workout
-                    ? workout.label
-                    : "Rest Day"}
+                  : workout.label}
               </Text>
-              {!!ordinal && !(isRestDay && showRestBanner) && (
+              {!!ordinal && !(!isPastLog && isRestDay && showRestBanner) && (
                 <View
                   style={[
                     s.ordinalBadge,
@@ -1033,6 +1080,7 @@ export default function DayLogger({
 
 const s = StyleSheet.create({
   safe: { flex: 1 },
+  loadingWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
   topbar: {
     paddingHorizontal: 16,
     paddingTop: 16,

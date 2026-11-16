@@ -120,6 +120,13 @@ export default function HistoryScreen() {
   useFocusEffect(
     useCallback(() => {
       const onHardwareBackPress = () => {
+        if (activeDayLogger) {
+          setActiveDayLogger(null);
+          setPastLogDate(null);
+          setPastLogWorkoutId(null);
+          loadSessions().then(setSessions);
+          return true;
+        }
         if (editSessionKey && activeEntry) {
           setActiveEntry(null);
           return true;
@@ -136,7 +143,7 @@ export default function HistoryScreen() {
         onHardwareBackPress,
       );
       return () => subscription.remove();
-    }, [editSessionKey, activeEntry]),
+    }, [activeDayLogger, editSessionKey, activeEntry]),
   );
 
   const filteredKeys = getFilteredKeys(sessions, filter).slice().reverse();
