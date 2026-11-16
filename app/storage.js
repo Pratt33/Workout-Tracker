@@ -184,6 +184,21 @@ export async function loadSessions() {
   return normalizeSessionsMap(sessions);
 }
 
+function sessionHasData(session) {
+  if (!session || typeof session !== "object") return false;
+  if (session._rest) return true;
+  return Object.keys(session).some((key) => {
+    if (key.startsWith("_")) return false;
+    const value = session[key];
+    if (Array.isArray(value)) return hasLoggedSets(value);
+    if (value && typeof value === "object") {
+      if (value.kg !== undefined) return String(value.kg).trim() !== "";
+      return Object.keys(value).length > 0;
+    }
+    return String(value).trim() !== "";
+  });
+}
+
 function normalizeSessionsMap(sessions) {
   if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
     return {};
@@ -191,7 +206,10 @@ function normalizeSessionsMap(sessions) {
   const next = {};
   Object.entries(sessions).forEach(([key, value]) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    next[key] = normalizeSessionData(value);
+    const normalized = normalizeSessionData(value);
+    // Older builds kept sessions that only had _workoutId/_label after the last
+    // exercise was cleared. Drop those so they stop showing in History.
+    if (sessionHasData(normalized)) next[key] = normalized;
   });
   return next;
 }
@@ -822,6 +840,7 @@ export function buildLLMExportPayload(
   });
 
   const cardio = {};
+  const cardioSamples = {};
   sessionKeys.forEach((dateKey) => {
     const session = sessions[dateKey] || {};
     getLoggedSessionEntries(session, cardioConfig).forEach((entry) => {
@@ -835,23 +854,34 @@ export function buildLLMExportPayload(
           avg_speed_kmh: 0,
           avg_incline_pct: 0,
         };
+        cardioSamples[entry.name] = { speed: 0, incline: 0 };
       }
       const summary = cardio[entry.name];
+      const samples = cardioSamples[entry.name];
       summary.sessions += 1;
       summary.duration_min += (parseInt(values.durationSec, 10) || 0) / 60;
       summary.distance_km += parseFloat(values.distance) || 0;
-      summary.avg_speed_kmh += parseFloat(values.speed) || 0;
-      summary.avg_incline_pct += parseFloat(values.incline) || 0;
+      if (String(values.speed).trim() !== "") {
+        summary.avg_speed_kmh += parseFloat(values.speed) || 0;
+        samples.speed += 1;
+      }
+      if (String(values.incline).trim() !== "") {
+        summary.avg_incline_pct += parseFloat(values.incline) || 0;
+        samples.incline += 1;
+      }
     });
   });
-  Object.values(cardio).forEach((entry) => {
+  Object.entries(cardio).forEach(([name, entry]) => {
     entry.duration_min = Math.round(entry.duration_min * 10) / 10;
     entry.distance_km = Math.round(entry.distance_km * 10) / 10;
-    if (entry.sessions > 0) {
+    const samples = cardioSamples[name] || { speed: 0, incline: 0 };
+    if (samples.speed > 0) {
       entry.avg_speed_kmh =
-        Math.round((entry.avg_speed_kmh / entry.sessions) * 10) / 10;
+        Math.round((entry.avg_speed_kmh / samples.speed) * 10) / 10;
+    }
+    if (samples.incline > 0) {
       entry.avg_incline_pct =
-        Math.round((entry.avg_incline_pct / entry.sessions) * 10) / 10;
+        Math.round((entry.avg_incline_pct / samples.incline) * 10) / 10;
     }
   });
 

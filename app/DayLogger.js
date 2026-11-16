@@ -392,15 +392,14 @@ export default function DayLogger({
 
     const nextSessions = JSON.parse(JSON.stringify(sessions));
     const existing = nextSessions[dateKey] || {};
-    existing._workoutId = workout.id;
-    existing._label = workout.label;
-    delete existing._rest;
 
     const info = getSessionEntry(existing, activeEx, cardioConfig);
+    let didLog = false;
 
     if (info.kind === "cardio") {
       const storageKey = getCardioStorageKey(activeEx, cardioConfig);
-      if (hasCardioValues(cardioValues)) {
+      didLog = hasCardioValues(cardioValues);
+      if (didLog) {
         existing[storageKey] = normalizeCardioValues(cardioValues);
       } else {
         delete existing[storageKey];
@@ -408,21 +407,39 @@ export default function DayLogger({
       if (storageKey !== activeEx) delete existing[activeEx];
     } else if (info.kind === "weight") {
       const kg = String(weightKg || "").trim();
-      if (kg) existing[activeEx] = { kg };
+      didLog = kg !== "";
+      if (didLog) existing[activeEx] = { kg };
       else delete existing[activeEx];
     } else {
       const sets = cleanWorkoutSets(activeSets);
-      if (sets.length > 0) existing[activeEx] = sets;
+      didLog = sets.length > 0;
+      if (didLog) existing[activeEx] = sets;
       else delete existing[activeEx];
     }
 
-    nextSessions[dateKey] = existing;
+    if (didLog) {
+      existing._workoutId = workout.id;
+      existing._label = workout.label;
+      delete existing._rest;
+    }
+
+    // Saving an untouched logger must not leave a metadata-only session behind:
+    // it would show up in History and consume a rotation slot.
+    const hasLoggedData = Object.keys(existing).some(
+      (key) => !key.startsWith("_"),
+    );
+    if (hasLoggedData || existing._rest) {
+      nextSessions[dateKey] = existing;
+    } else {
+      delete nextSessions[dateKey];
+    }
+
     await saveSessions(nextSessions);
-    if (isRestDay) {
+    if (didLog && isRestDay) {
       await saveRestDay(dateKey, false);
+      setIsRestDay(false);
     }
     setSessions(nextSessions);
-    setIsRestDay(false);
     closeLogger();
   };
 
