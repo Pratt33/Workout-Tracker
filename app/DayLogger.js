@@ -225,6 +225,7 @@ export default function DayLogger({
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [isRestDay, setIsRestDay] = useState(false);
   const [showRestBanner, setShowRestBanner] = useState(true);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const slideAnim = useRef(new Animated.Value(60)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const saveScaleAnim = useRef(new Animated.Value(1)).current;
@@ -271,6 +272,7 @@ export default function DayLogger({
     setWorkoutInfo(context);
     setIsRestDay(restStatus);
     setShowRestBanner(restStatus);
+    setDataLoaded(true);
   }, [dateKey, initialWorkoutId]);
 
   useFocusEffect(
@@ -521,8 +523,9 @@ export default function DayLogger({
     ? getCardioEntry(activeEx, cardioConfig)
     : null;
   // Past logs always show the workout, even when that date was marked as rest.
+  // Before data loads we must not treat a missing workout as a rest day.
   const showRestView =
-    !isPastLog && ((isRestDay && showRestBanner) || !workout);
+    dataLoaded && !isPastLog && ((isRestDay && showRestBanner) || !workout);
   const nextWorkoutId = getNextWorkoutId(plan, sessions, dateKey);
   const nextWorkout = getWorkoutById(plan, nextWorkoutId);
 
@@ -570,10 +573,10 @@ export default function DayLogger({
     month: "long",
   });
 
-  // Past-log mode never shows the rest view, so guard this render while the
-  // plan/session data is still loading. Without it, opening a past date could
-  // read workout.groups on null and close the app.
-  if (!workout) {
+  // Guard the first render while the plan/session data is still loading. In
+  // past-log mode this prevents reading workout.groups on null, and on Today it
+  // prevents a flash of "Rest Day" before the real workout resolves.
+  if (!dataLoaded || !workout) {
     return (
       <SafeAreaView style={[s.safe, { backgroundColor: t.bg }]}>
         <View

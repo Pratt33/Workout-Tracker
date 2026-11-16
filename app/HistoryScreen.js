@@ -47,6 +47,7 @@ import {
 import { useTheme } from "../app/theme";
 import { isTimedExercise } from "../app/catalog";
 import { getWorkoutForDate } from "../app/schedule";
+import { parseDateKey, todayKey } from "../app/dates";
 import {
   getCardioSummary,
   getLoggedSessionEntries,
@@ -383,6 +384,18 @@ export default function HistoryScreen() {
   const openPastLogModal = () => {
     syncPastLogDate(new Date());
     setPastLogModalVisible(true);
+  };
+
+  // Web inputs only give us a complete date or an empty string. Clearing the
+  // field should clear the selection instead of silently keeping the old date.
+  const applyWebPastLogDate = (value) => {
+    const parsed = parseDateKey(value);
+    if (!parsed || value > todayKey()) {
+      setPastLogDate(null);
+      setPastLogWorkoutId(null);
+      return;
+    }
+    syncPastLogDate(parsed);
   };
 
   if (editSessionKey && activeEntry) {
@@ -939,34 +952,71 @@ export default function HistoryScreen() {
             </Text>
 
             <Text style={[s.pastLogLabel, { color: t.textSub }]}>Date</Text>
-            <TouchableOpacity
-              style={[
-                s.pastLogDateBtn,
-                { backgroundColor: t.inputBg, borderColor: t.border },
-              ]}
-              onPress={() => setShowPastLogDatePicker(true)}
-            >
-              <Ionicons name="calendar-outline" size={16} color={t.accent} />
-              <Text style={[s.pastLogDateText, { color: t.text }]}>
-                {pastLogDate ? formatDate(pastLogDate) : "Choose a date"}
-              </Text>
-            </TouchableOpacity>
-
-            {(Platform.OS === "ios" || showPastLogDatePicker) && (
-              <View style={s.pastLogPickerWrap}>
-                <DateTimePicker
-                  value={pastLogPickerDate}
-                  mode="date"
-                  maximumDate={new Date()}
-                  display={Platform.OS === "android" ? "calendar" : "spinner"}
-                  onChange={(_, selectedDate) => {
-                    if (selectedDate) syncPastLogDate(selectedDate);
-                    if (Platform.OS !== "ios") {
-                      setShowPastLogDatePicker(false);
-                    }
-                  }}
-                />
+            {Platform.OS === "web" ? (
+              <View style={s.pastLogWebDateWrap}>
+                {React.createElement("input", {
+                  type: "date",
+                  value: pastLogDate || "",
+                  max: todayKey(),
+                  onChange: (event) => {
+                    applyWebPastLogDate(event?.target?.value || "");
+                  },
+                  "aria-label": "Pick a past date",
+                  style: {
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: `1px solid ${t.border}`,
+                    background: t.inputBg,
+                    color: t.text,
+                    fontSize: 14,
+                    fontFamily: "inherit",
+                    outlineColor: t.accent,
+                  },
+                })}
+                <Text style={[s.pastLogHint, { color: t.textSub }]}>
+                  Tap the field to open your browser date picker.
+                </Text>
               </View>
+            ) : (
+              <>
+                <TouchableOpacity
+                  style={[
+                    s.pastLogDateBtn,
+                    { backgroundColor: t.inputBg, borderColor: t.border },
+                  ]}
+                  onPress={() => setShowPastLogDatePicker(true)}
+                >
+                  <Ionicons
+                    name="calendar-outline"
+                    size={16}
+                    color={t.accent}
+                  />
+                  <Text style={[s.pastLogDateText, { color: t.text }]}>
+                    {pastLogDate ? formatDate(pastLogDate) : "Choose a date"}
+                  </Text>
+                </TouchableOpacity>
+
+                {(Platform.OS === "ios" || showPastLogDatePicker) && (
+                  <View style={s.pastLogPickerWrap}>
+                    <DateTimePicker
+                      value={pastLogPickerDate}
+                      mode="date"
+                      maximumDate={new Date()}
+                      display={
+                        Platform.OS === "android" ? "calendar" : "spinner"
+                      }
+                      onChange={(_, selectedDate) => {
+                        if (selectedDate) syncPastLogDate(selectedDate);
+                        if (Platform.OS !== "ios") {
+                          setShowPastLogDatePicker(false);
+                        }
+                      }}
+                    />
+                  </View>
+                )}
+              </>
             )}
 
             <Text
@@ -1289,6 +1339,8 @@ const s = StyleSheet.create({
     gap: 10,
   },
   pastLogDateText: { fontSize: 14, fontWeight: "600" },
+  pastLogWebDateWrap: { marginBottom: 4 },
+  pastLogHint: { fontSize: 11, marginTop: 6 },
   pastLogPickerWrap: {
     marginTop: 10,
     borderRadius: 12,
