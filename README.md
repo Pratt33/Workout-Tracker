@@ -70,12 +70,15 @@ Goals:
 - react-native-safe-area-context
 
 ## App Download Link
-Android build for v6.0.0:
-- Build page: https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/acd75fe2-4edb-423f-b6d0-c0dd623108d6
-- Android bundle (.aab): https://expo.dev/artifacts/eas/HaP4RrYwTdWz8D4TwS2LXbncT2n5XNT-tqru7OtRgW8.aab
+Latest Android build (v6.0.0, versionCode 9):
+- Build page: https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/1193158b-4941-4879-b0e2-808c427ac537
+- Android bundle (.aab): https://expo.dev/artifacts/eas/R1AsFzT7YHy5SfuUcSYVbkwS1S_zuW-0PmDZBKYnuXU.aab
 
-Previous v5.1 build:
-- https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/7a3e1da6-bd79-4f62-b194-e5eea1d7f456
+This build includes the past-day logging crash fix, independent cardio/body-weight logging, and the web date-picker fix.
+
+Previous builds:
+- v6.0.0 build 8: https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/acd75fe2-4edb-423f-b6d0-c0dd623108d6
+- v5.1: https://expo.dev/accounts/pratt33/projects/workout-tracker/builds/7a3e1da6-bd79-4f62-b194-e5eea1d7f456
 
 ## Future Improvements
 - Personal best tracking and milestones.
